@@ -75,6 +75,9 @@ const pmExplainerText = `\n\nPlease click on the dates on which you are availabl
 rangeCalendar.setDateListener(async (ctx, date) => {
     // handle calendar in groups
     if (ctx.chat.type === "group" || ctx.chat.type === "supergroup") {
+
+        if (!groups[ctx.chat.id]) return sendErrorMessage(ctx, "Sorry, there was an unexpected error. Have you started the bot with /start?")
+
         // check if the person who clicked is the person who started the calendar
         if (ctx.from.id !== groups[ctx.chat.id].creator.userId)
             return sendErrorMessage(
