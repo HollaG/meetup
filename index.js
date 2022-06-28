@@ -387,7 +387,7 @@ bot.command("stop", async (ctx) => {
                     let addText =
                         `<b><u>${formatDate(
                             groups[groupId].dates.start
-                        )}</u></b> - <b><u>${formatDate(
+                        )}</u></b> to <b><u>${formatDate(
                             groups[groupId].dates.end
                         )}</u></b>\n\n` +
                         listOfPeopleFormatGenerator(
@@ -397,7 +397,10 @@ bot.command("stop", async (ctx) => {
                         );
                     text += addText;
                 }
-                ctx.replyWithHTML(text, { disable_web_page_preview: true });
+                const finalMsg = await ctx.replyWithHTML(text, { disable_web_page_preview: true });              
+                ctx.telegram.editMessageText(ctx.chat.id, groups[groupId].info_message.message_id, null, `Availability gathering has stopped. Please refer to the latest message by the bot!`, {
+                    parse_mode: "HTML"
+                })
                 delete groups[groupId];
             } else {
                 ctx.reply(
