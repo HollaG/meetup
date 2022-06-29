@@ -9,7 +9,7 @@ const sendErrorMessage = (ctx, message) => {
 
 const sendAutoDeleteMessage = (ctx, message, delay) => {
     // Plain text only
-    ctx.reply(message).then((msg) => setTimeout(() => ctx.deleteMessage(msg.message_id), delay));
+    ctx.replyWithHTML(message).then((msg) => setTimeout(() => ctx.deleteMessage(msg.message_id), delay));
 }
 
 const formatDate = date => {     //date: yyyy-MM-dd

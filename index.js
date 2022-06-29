@@ -29,7 +29,7 @@ const groups = {};
 // 2: Available (morning/afternoon)
 // 3: Available (evening/night)
 
-const availabilityArrayMap = ["(Unavailable)", "", "(Day)", "(Night)"];
+const availabilityArrayMap = ["(Unavailable)", "", "(Day ☀️)", "(Night 🌑)"];
 const availabilityMap = (availablilityType) => {
     // availabilityType can be 0, 1, 2, 3, or string (when custom reason)
     if (typeof availablilityType === "string") {
@@ -73,17 +73,22 @@ const groupNameMap = {};
 //     "groupId": "groupName"
 // }
 
+const groupMembersMap = {};
+// {
+//     "groupId": "memberCount"
+// }
+
 const memberToGroupMap = {};
 // {
 //     "memberId": "groupId"
 // }
 
-let memberTimeout = {};
+const memberTimeout = {};
 // {
 //     "memberId": setTimeout()
 // }
 
-let memberActionableMessages = {};
+const memberActionableMessages = {};
 // {
 //     "memberId": {
 //         "select_dates": "message",
@@ -92,7 +97,7 @@ let memberActionableMessages = {};
 //     }
 // }
 
-let memberInputCustomMessage = {};
+const memberInputCustomMessage = {};
 // {
 //     "memberId": {
 //         "date": "yyyy-MM-yy",
@@ -105,12 +110,17 @@ const memberMessageIDsToEditAfterStop = {};
 //     "memberId": ["messageId"]
 // }
 
+const groupBotCount = {}
+// {
+//     "groupId": "numBots"
+// }
+
 const rangeCalendar = new Calendar(bot, {
     minDate: new Date(),
 });
 
 const selectDatesExplainerText = `\n\nPlease click on the dates on which you are available.\nTo reset, click the date again.\n\nℹ Updates will take ~1 second to be reflected - this is to prevent spam.\n\n<b><u>Available dates</u></b>\n`;
-const advancedExplainerText = `<i><b><u>⚙️ Advanced options for dates ⚙️</u></b></i>\n\nℹ At least one date must be selected above!\n\n🕐 Click on the specific time for each date to <b><u>toggle your available state</u></b>.\nIf you are available for the whole day, do not click on any button.\n\n🔧 To specify a custom message, click on the <b>《 Custom 🔧 》</b> button, then enter your message.`;
+const advancedExplainerText = `<i><b><u>⚙️ Advanced options for dates ⚙️</u></b></i>\n\nℹ At least one date must be selected above!\n\n🕐 Click on the ✅ or ❌ to <b><u>toggle your available state</u></b> for that time.\nIf you are available for the whole day, do not click on any button.\n\n🔧 To specify a custom message, click on the <b>《 Custom 🔧 》</b> button, then enter your message.`;
 
 rangeCalendar.setDateListener((ctx, date) => {
     // handle calendar in groups
@@ -253,11 +263,11 @@ rangeCalendar.setDateListener((ctx, date) => {
             // }
         }
 
-        // const totalMembers = await ctx.getChatMembersCount();
+        const totalMembers = groupMembersMap[linkedGroupId];
 
         // Handle response to user
         // if (!memberTimeout[userId]) ctx.replyWithChatAction("typing");
-        
+
         clearTimeout(memberTimeout[userId]);
         memberTimeout[userId] = setTimeout(() => {
             // after 1 seconds, update the messages
@@ -280,7 +290,8 @@ rangeCalendar.setDateListener((ctx, date) => {
 
                 groups,
                 linkedGroupId,
-                memberNameMap
+                memberNameMap,
+                totalMembers
             );
 
             // update the advanced message
@@ -321,14 +332,21 @@ bot.start(async (ctx) => {
 
         if (memberToGroupMap[ctx.chat.id] === linkedGroupId) {
             // user already did /start, get them to reuse the old calendar
-            return sendErrorMessage(ctx, `❗️ You have already started the calendar!`)
+            return sendErrorMessage(
+                ctx,
+                `❗️ You have already started the calendar!`
+            );
         }
 
         memberToGroupMap[ctx.chat.id] = linkedGroupId;
         memberActionableMessages[ctx.chat.id] = {};
 
         const group = groups[linkedGroupId];
-        if (!group) return sendErrorMessage(ctx, `❗️ Error: No running calendar found!\n\nCheck if the calendar in the group has been stopped`)
+        if (!group)
+            return sendErrorMessage(
+                ctx,
+                `❗️ Error: No running calendar found!\n\nCheck if the calendar in the group has been stopped`
+            );
         const { start, end } = group.dates;
 
         rangeCalendar.setMinDate(new Date(start));
@@ -383,6 +401,8 @@ bot.start(async (ctx) => {
             selectDatesMsg.message_id,
             advancedMsg.message_id,
         ];
+
+        
     } else if (chat.type === "group" || chat.type === "supergroup") {
         // Check if there already is a running calendar in the group
         if (groups[chat.id]) {
@@ -434,7 +454,7 @@ bot.command("stop", async (ctx) => {
             if (senderId === groups[groupId].creator.userId) {
                 // yes, stop it
                 // delete the calendar
-            
+
                 let text = "Calendar stopped. Thank you for using!\n\n";
                 let totalMembers = await ctx.getChatMembersCount();
 
@@ -447,9 +467,10 @@ bot.command("stop", async (ctx) => {
                             groups[groupId].dates.end
                         )}</u></b>\n\n` +
                         listOfPeopleFormatGenerator(
+                            groups[groupId].scheduleByMember,
                             groups[groupId].scheduleByDate,
                             memberNameMap,
-                            totalMembers
+                           
                         );
                     text += addText;
                 }
@@ -484,9 +505,20 @@ bot.command("stop", async (ctx) => {
                             }
                         );
                     }
+
+                    // cleanup the member objects
+                    delete memberToGroupMap[memberId];
+                    delete memberTimeout[memberId]
+                    delete memberActionableMessages[memberId];
+                    delete memberInputCustomMessage[memberId];
+                    delete memberMessageIDsToEditAfterStop[memberId];
+                    
                 });
 
+
+                // cleanup
                 delete groups[groupId];
+
             } else {
                 ctx.reply(
                     `Sorry, only the calendar creator can stop this calendar.`
@@ -516,6 +548,45 @@ bot.command("cancel", async (ctx) => {
         }
     }
 });
+
+// Handlers to send a message into all groups - only botAdmin can do this
+bot.command("broadcast", (ctx) => {
+    if (ctx.from.id.toString() === process.env.BOT_OWNER) {
+        // send message into every group active in groups
+        const message = sanitizeHtml(
+            ctx.message.text.split(" ").slice(1).join(" ")
+        );
+
+        const groupIds = Object.keys(groups);
+        groupIds.forEach((groupId) => {
+            ctx.telegram
+                .sendMessage(groupId, message, {
+                    parse_mode: "HTML",
+                })
+                .then(() => sendAutoDeleteMessage(ctx, `Message sent.`, 5000))
+                .catch((e) => ctx.reply(e.response.description));
+        });
+    }
+});
+
+// prompt the user to set the number of bots in the channel excluding the plannerbot. Defaults to 0
+bot.command("setBotCount", async (ctx) => {
+    if (ctx.chat.type === "private") {
+        sendAutoDeleteMessage(ctx, `Sorry, this command can only be run in a group.`, 5000)
+    } else {
+        const numBots = Number(ctx.message.text.split(" ").slice(1).join(" "));
+        const numTotal = await ctx.getChatMembersCount(ctx.chat.id);
+        if (numBots + 2 > numTotal) {
+            // If there are n people in a channel and 1 known bot, then there has to be at most n-2 bots in the channel. 1) owner 2) meetupbot
+            sendAutoDeleteMessage(
+                ctx,
+                `Impossible bot number. Please try again. \n\n❗️ Do not include the MeetupBot in the count!`, 5000)
+        } else { 
+            groupBotCount[ctx.chat.id] = numBots;
+            sendAutoDeleteMessage(ctx, `Bot count set to ${numBots}`, 5000)
+        }
+    }
+})
 
 bot.on("callback_query", (ctx) => {
     // ctx.reply(`You chose ${ctx.update.callback_query.data}`);
@@ -564,7 +635,7 @@ const resetRange = async (ctx) => {
             groups[ctx.chat.id].messageIdsForDeletion.push(message.message_id);
         });
 
-    ctx.answerCbQuery()
+    ctx.answerCbQuery();
 };
 
 const launchWaitingForOthers = async (ctx) => {
@@ -593,7 +664,7 @@ const launchWaitingForOthers = async (ctx) => {
             end
         )}</u></b> 🗓\n\nMembers, please indicate your available dates in this range by clicking on the button below.\n\n⏹ @${
             groups[ctx.chat.id].creator.username
-        }: Type /stop when you are done collecting info.\n\n`,
+        }: Type /stop when you are done collecting info.\n\n😄: All respondents attending.\n😀: &gt; 75% of respondents attending.\n🙂: &gt; 50% of respondents attending.\n\n`,
         {
             reply_markup: {
                 inline_keyboard: [
@@ -609,7 +680,15 @@ const launchWaitingForOthers = async (ctx) => {
     );
 
     groups[ctx.chat.id].info_message = msg;
-    ctx.answerCbQuery()
+
+    // calculate the total number of members and store it
+    const totalMembers = await ctx.getChatMembersCount(ctx.chat.id)
+    
+    const otherBots = groupBotCount[ctx.chat.id] || 0;
+    groupMembersMap[ctx.chat.id] = totalMembers - otherBots - 1|| 0 // cannot account for other bots!!!!!!
+
+
+    ctx.answerCbQuery();
 };
 
 const launchAdvanced = (ctx) => {
@@ -632,7 +711,7 @@ const launchAdvanced = (ctx) => {
         groups
     );
 
-    ctx.answerCbQuery()
+    ctx.answerCbQuery();
 };
 
 const manageAdvanced = async (ctx, identifier) => {
@@ -732,7 +811,7 @@ const manageAdvanced = async (ctx, identifier) => {
                 // );
             });
         }
-        ctx.answerCbQuery()
+        ctx.answerCbQuery();
         return;
     }
 
@@ -751,7 +830,7 @@ const manageAdvanced = async (ctx, identifier) => {
     // console.log(groups[groupId])
 
     // todo add timeouts
-
+    const totalMembers = groupMembersMap[groupId]
     clearTimeout(memberTimeout[userId]);
     memberTimeout[userId] = setTimeout(() => {
         delete memberTimeout[userId];
@@ -763,7 +842,7 @@ const manageAdvanced = async (ctx, identifier) => {
             groups
         );
         updateDmDateMessage(ctx, groups, groupId, availabilityMap, userId);
-        updateGroupMessage(ctx, groups, groupId, memberNameMap);
+        updateGroupMessage(ctx, groups, groupId, memberNameMap, totalMembers);
     }, 1000);
 };
 
@@ -818,9 +897,9 @@ bot.on("text", (ctx) => {
 
         sendAutoDeleteMessage(
             ctx,
-            `Your custom message for ${formatDate(
+            `Your custom message for <b><u>${formatDate(
                 date
-            )} has been received.\n\n${sanitizedMessage}`,
+            )}</u></b> has been received.\n\n${sanitizedMessage}`,
             5000
         );
 
@@ -831,10 +910,13 @@ bot.on("text", (ctx) => {
 
         delete memberInputCustomMessage[userId];
         delete memberActionableMessages[userId].custom_prompt;
-        if (!groupId) return sendErrorMessage(ctx, `❗️ Error: no linked group!`);
+        if (!groupId)
+            return sendErrorMessage(ctx, `❗️ Error: no linked group!`);
 
         groups[groupId].scheduleByMember[userId][date] = sanitizedMessage;
         groups[groupId].scheduleByDate[date][userId] = sanitizedMessage;
+
+        const totalMembers = groupMembersMap[groupId]
 
         updateDmAdvancedMessage(
             ctx,
@@ -844,7 +926,7 @@ bot.on("text", (ctx) => {
             groups
         );
         updateDmDateMessage(ctx, groups, groupId, availabilityMap, userId);
-        updateGroupMessage(ctx, groups, groupId, memberNameMap);
+        updateGroupMessage(ctx, groups, groupId, memberNameMap, totalMembers);
     }
 });
 
@@ -899,9 +981,10 @@ const selectedDatesGenerator = (dates) => {
     return text;
 };
 
-const updateGroupMessage = (ctx, groups, linkedGroupId, memberNameMap) => {
+const updateGroupMessage = (ctx, groups, linkedGroupId, memberNameMap, totalMembers) => {
     const { start, end } = groups[linkedGroupId].dates;
-
+    if (!totalMembers) totalMembers = 1000000
+    
     // edit message in group - let everyone know
     let updatedMessage =
         `Gathering availability information for\n🗓 <b><u>${formatDate(
@@ -910,15 +993,16 @@ const updateGroupMessage = (ctx, groups, linkedGroupId, memberNameMap) => {
             end
         )}</u></b> 🗓\n\nMembers, please indicate your available dates by clicking on the button below.\n\n⏹ @${
             groups[linkedGroupId].creator.username
-        }: Type /stop when you are done collecting info.\n\n` +
+        }: Type /stop when you are done collecting info.\n\n😄: All respondents attending.\n😀: &gt; 75% of respondents attending.\n🙂: &gt; 50% of respondents attending.\n\n` +
         listOfPeopleFormatGenerator(
+            groups[linkedGroupId].scheduleByMember,
             groups[linkedGroupId].scheduleByDate,
             memberNameMap,
-            10 // TODO
+           
         ) +
         `👥 Responses: ${
             Object.keys(groups[linkedGroupId].scheduleByMember).length
-        }`;
+        } / ${totalMembers}`;
     ctx.telegram
         .editMessageText(
             groups[linkedGroupId].info_message.chat.id,
@@ -948,7 +1032,7 @@ const updateDmDateMessage = (
 
     let message = `🗓 <i>Indicating dates for <b><u>${
         groupNameMap[linkedGroupId]
-    }</u></b></i>\n\nHello! @${
+    }</u></b></i> 🗓\n\nHello! @${
         groups[linkedGroupId].creator.username
     } requests that you indicate your available dates from <b><u>${formatDate(
         start
@@ -1013,10 +1097,13 @@ const updateDmAdvancedMessage = (
 };
 
 const listOfPeopleFormatGenerator = (
+    scheduleByMember,
     scheduleByDate,
     memberNameMap,
-    totalMembers
 ) => {
+
+    let numberResponded = Object.keys(scheduleByMember).length
+
     let listOfPeople = "<b><u>Availability list</u></b>\n";
     for (let date of Object.keys(scheduleByDate).sort(
         (a, b) => new Date(a) - new Date(b)
@@ -1041,14 +1128,14 @@ const listOfPeopleFormatGenerator = (
             ).length; // returns ids of persons attending either whole or night
 
             let percentAttending = Math.floor(
-                (numberAttending / totalMembers) * 100
+                (numberAttending / numberResponded) * 100
             );
             let percentAttendingDay = Math.floor(
-                (numberAttendingDay / totalMembers) * 100
+                (numberAttendingDay / numberResponded) * 100
             );
 
             let percentAttendingNight = Math.floor(
-                (numberAttendingNight / totalMembers) * 100
+                (numberAttendingNight / numberResponded) * 100
             );
 
             // take the highest of the 3
@@ -1087,7 +1174,7 @@ bot.launch().then(() => console.log("Bot is running!"));
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
 
-process.on("uncaughtException", console.log)
-process.on("unhandledRejection", console.log)
-process.on("warning", console.log)
-process.on("error", console.log)
+process.on("uncaughtException", console.log);
+process.on("unhandledRejection", console.log);
+process.on("warning", console.log);
+process.on("error", console.log);
