@@ -5,6 +5,7 @@ const sendErrorMessage = (ctx, message) => {
     ctx.reply(message).then((msg) =>
         setTimeout(() => ctx.deleteMessage(msg.message_id), 5000)
     );
+    ctx.answerCbQuery()
 };
 
 const sendAutoDeleteMessage = (ctx, message, delay) => {
@@ -60,9 +61,10 @@ const advancedMarkupGenerator = (userId, groupId,  groups) => {
     const advancedMarkup = [[{ text: "Date", callback_data: "adv_ignore_date"}, { text: "Day ☀️", callback_data: "adv_ignore_day"}, { text: "Night 🌑", callback_data: "adv_ignore_night"}, { text: "Custom 🔧", callback_data: "adv_ignore_custom"}]]
 
     
-    if (!groups[groupId].scheduleByMember[userId]) return false
+    // if (!groups[groupId].scheduleByMember[userId]) return false
+    let dates = Object.keys(groups[groupId].scheduleByMember[userId] || []).sort((a,b) => new Date(a) - new Date(b))
 
-    Object.keys(groups[groupId].scheduleByMember[userId]).sort((a,b) => new Date(a) - new Date(b)).forEach(date => { 
+    dates.forEach(date => { 
         // for each date, push one row to the markup
         let availablilityType = groups[groupId].scheduleByMember[userId][date]
         advancedMarkup.push([{ text: formatDateShort(date), callback_data: `adv_ignore_${date}`}, { text: (availablilityType === 1 || availablilityType === 2) ? "✅" : "❌", callback_data: `adv_day_${date}_${userId}`}, { text: (availablilityType === 1 || availablilityType === 3) ?  "✅" : "❌", callback_data: `adv_night_${date}_${userId}`}, { text: typeof availablilityType === "string" ? "✅" : "❌", callback_data: `adv_custom_${date}_${userId}`}])

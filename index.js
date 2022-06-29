@@ -57,6 +57,7 @@ const DEFAULT_USER_OBJECT = {
             date: 1,
         },
     },
+    cmi: [],
     creator: {
         userId: 0,
         username: 0,
@@ -110,7 +111,7 @@ const memberMessageIDsToEditAfterStop = {};
 //     "memberId": ["messageId"]
 // }
 
-const groupBotCount = {}
+const groupBotCount = {};
 // {
 //     "groupId": "numBots"
 // }
@@ -119,7 +120,7 @@ const rangeCalendar = new Calendar(bot, {
     minDate: new Date(),
 });
 
-const selectDatesExplainerText = `\n\nPlease click on the dates on which you are available.\nTo reset, click the date again.\n\nℹ Updates will take ~1 second to be reflected - this is to prevent spam.\n\n<b><u>Available dates</u></b>\n`;
+const selectDatesExplainerText = `\n\nPlease click on the dates on which you are available.\nTo reset, click the date again.\n\nℹ Updates will take ~1 second to be reflected - this is to prevent spam.\n\nℹ If you cannot make it for any of the dates, click the <b>《 🙁 I can't make it 》</b> button.\n\n<b><u>Available dates</u></b>\n`;
 const advancedExplainerText = `<i><b><u>⚙️ Advanced options for dates ⚙️</u></b></i>\n\nℹ At least one date must be selected above!\n\n🕐 Click on the ✅ or ❌ to <b><u>toggle your available state</u></b> for that time.\nIf you are available for the whole day, do not click on any button.\n\n🔧 To specify a custom message, click on the <b>《 Custom 🔧 》</b> button, then enter your message.`;
 
 rangeCalendar.setDateListener((ctx, date) => {
@@ -250,6 +251,11 @@ rangeCalendar.setDateListener((ctx, date) => {
             // user is now free on this date
             groups[linkedGroupId].scheduleByDate[date][userId] = 1;
             groups[linkedGroupId].scheduleByMember[userId][date] = 1;
+
+            if (groups[linkedGroupId].cmi.includes(userId.toString())) { 
+                // user previously indicated they CMI, now they're free so remove them from the array
+                groups[linkedGroupId].cmi.splice(groups[linkedGroupId].cmi.indexOf(userId.toString()), 1);
+            }
         } else {
             delete groups[linkedGroupId].scheduleByDate[date][userId];
             delete groups[linkedGroupId].scheduleByMember[userId][date];
@@ -262,6 +268,17 @@ rangeCalendar.setDateListener((ctx, date) => {
             //     groups[linkedGroupId].scheduleByMember[userId][date]++;
             // }
         }
+
+        if (
+            Object.keys(groups[linkedGroupId].scheduleByMember[userId])
+                .length === 0
+        ) {
+            // this user is no longer attending any
+            // todo - should we auto set them to cannot make it?
+            delete groups[linkedGroupId].scheduleByMember[userId];
+        }
+
+        
 
         const totalMembers = groupMembersMap[linkedGroupId];
 
@@ -352,17 +369,17 @@ bot.start(async (ctx) => {
         rangeCalendar.setMinDate(new Date(start));
         rangeCalendar.setMaxDate(new Date(end));
 
-        // const calendarMarkup =
-        //     rangeCalendar.getCalendar().reply_markup.inline_keyboard;
-        // const finalMarkup = [
-        //     [
-        //         {
-        //             text: "Update advanced options 🔄",
-        //             callback_data: "adv",
-        //         },
-        //     ],
-        //     ...calendarMarkup,
-        // ];
+        const calendarMarkup =
+            rangeCalendar.getCalendar().reply_markup.inline_keyboard;
+        const finalMarkup = [
+            [
+                {
+                    text: "🙁 I can't make it",
+                    callback_data: "cmi",
+                },
+            ],
+            ...calendarMarkup,
+        ];
 
         const selectDatesMsg = await ctx.replyWithHTML(
             `🗓 <i>Indicating dates for <b><u>${
@@ -375,7 +392,7 @@ bot.start(async (ctx) => {
                 end
             )}</u></b>.${selectDatesExplainerText}`,
 
-            rangeCalendar.getCalendar()
+            { reply_markup: { inline_keyboard: finalMarkup } }
         );
         memberActionableMessages[ctx.chat.id].select_dates = selectDatesMsg;
 
@@ -401,8 +418,6 @@ bot.start(async (ctx) => {
             selectDatesMsg.message_id,
             advancedMsg.message_id,
         ];
-
-        
     } else if (chat.type === "group" || chat.type === "supergroup") {
         // Check if there already is a running calendar in the group
         if (groups[chat.id]) {
@@ -426,6 +441,7 @@ bot.start(async (ctx) => {
             scheduleByDate: {},
             scheduleByMember: {},
             info_message: null,
+            cmi: [],
             creator: { userId: ctx.from.id, username: ctx.from.username },
         };
 
@@ -469,8 +485,7 @@ bot.command("stop", async (ctx) => {
                         listOfPeopleFormatGenerator(
                             groups[groupId].scheduleByMember,
                             groups[groupId].scheduleByDate,
-                            memberNameMap,
-                           
+                            memberNameMap
                         );
                     text += addText;
                 }
@@ -508,17 +523,14 @@ bot.command("stop", async (ctx) => {
 
                     // cleanup the member objects
                     delete memberToGroupMap[memberId];
-                    delete memberTimeout[memberId]
+                    delete memberTimeout[memberId];
                     delete memberActionableMessages[memberId];
                     delete memberInputCustomMessage[memberId];
                     delete memberMessageIDsToEditAfterStop[memberId];
-                    
                 });
-
 
                 // cleanup
                 delete groups[groupId];
-
             } else {
                 ctx.reply(
                     `Sorry, only the calendar creator can stop this calendar.`
@@ -572,7 +584,11 @@ bot.command("broadcast", (ctx) => {
 // prompt the user to set the number of bots in the channel excluding the plannerbot. Defaults to 0
 bot.command("setBotCount", async (ctx) => {
     if (ctx.chat.type === "private") {
-        sendAutoDeleteMessage(ctx, `Sorry, this command can only be run in a group.`, 5000)
+        sendAutoDeleteMessage(
+            ctx,
+            `Sorry, this command can only be run in a group.`,
+            5000
+        );
     } else {
         const numBots = Number(ctx.message.text.split(" ").slice(1).join(" "));
         const numTotal = await ctx.getChatMembersCount(ctx.chat.id);
@@ -580,13 +596,15 @@ bot.command("setBotCount", async (ctx) => {
             // If there are n people in a channel and 1 known bot, then there has to be at most n-2 bots in the channel. 1) owner 2) meetupbot
             sendAutoDeleteMessage(
                 ctx,
-                `Impossible bot number. Please try again. \n\n❗️ Do not include the MeetupBot in the count!`, 5000)
-        } else { 
+                `Impossible bot number. Please try again. \n\n❗️ Do not include the MeetupBot in the count!`,
+                5000
+            );
+        } else {
             groupBotCount[ctx.chat.id] = numBots;
-            sendAutoDeleteMessage(ctx, `Bot count set to ${numBots}`, 5000)
+            sendAutoDeleteMessage(ctx, `Bot count set to ${numBots}`, 5000);
         }
     }
-})
+});
 
 bot.on("callback_query", (ctx) => {
     // ctx.reply(`You chose ${ctx.update.callback_query.data}`);
@@ -610,6 +628,11 @@ bot.on("callback_query", (ctx) => {
         }
         case "adv": {
             launchAdvanced(ctx);
+            break;
+        }
+        case "cmi": {
+            launchCmi(ctx);
+            break;
         }
     }
 });
@@ -670,6 +693,10 @@ const launchWaitingForOthers = async (ctx) => {
                 inline_keyboard: [
                     [
                         {
+                            text: "🙁 I can't make it",
+                            callback_data: "cmi",
+                        },
+                        {
                             text: "🗓 Indicate availability",
                             url: `https://t.me/meetup_plannerbot?start=${ctx.chat.id}`,
                         },
@@ -682,11 +709,10 @@ const launchWaitingForOthers = async (ctx) => {
     groups[ctx.chat.id].info_message = msg;
 
     // calculate the total number of members and store it
-    const totalMembers = await ctx.getChatMembersCount(ctx.chat.id)
-    
-    const otherBots = groupBotCount[ctx.chat.id] || 0;
-    groupMembersMap[ctx.chat.id] = totalMembers - otherBots - 1|| 0 // cannot account for other bots!!!!!!
+    const totalMembers = await ctx.getChatMembersCount(ctx.chat.id);
 
+    const otherBots = groupBotCount[ctx.chat.id] || 0;
+    groupMembersMap[ctx.chat.id] = totalMembers - otherBots - 1 || 0; // cannot account for other bots!!!!!!
 
     ctx.answerCbQuery();
 };
@@ -712,6 +738,85 @@ const launchAdvanced = (ctx) => {
     );
 
     ctx.answerCbQuery();
+};
+
+const launchCmi = async (ctx) => {
+    let groupId;
+    let userId;
+    if (ctx.chat.type === "private") {
+        userId = ctx.chat.id;
+        groupId = memberToGroupMap[userId];
+    } else {
+        groupId = ctx.chat.id;
+        userId = ctx.from.id;
+    }
+
+    const username = ctx.from.username;
+    const name = ctx.from.first_name;
+
+    memberNameMap[ctx.from.id] = { name, username };
+
+    if (!groups[groupId])
+        return sendErrorMessage(ctx, `❗️ Error: no linked group!`);
+
+    if (groups[groupId].cmi.includes(userId)) {
+        // user is already in the cmi list
+        sendErrorMessage(
+            ctx,
+            `❗️ @${username}, you have already indicated that you cannot make it!`
+        );
+    } else {
+        // if the user has indicated that they're coming, tell them that they have to remove their attendence first
+        if (
+            Object.keys(groups[groupId].scheduleByMember).includes(
+                userId.toString()
+            )
+        ) {
+            sendErrorMessage(
+                ctx,
+                `❗️ @${username}, you have indicated that you are attending on <b><u>${Object.keys(
+                    groups[groupId].scheduleByMember[userId]
+                )
+                    .map((date) => formatDate(date))
+                    .join(
+                        ", "
+                    )}</u></b>.\n\nPlease remove your attendance before trying again.`
+            );
+        } else {
+            groups[groupId].cmi.push(userId.toString());
+            sendAutoDeleteMessage(
+                ctx,
+                `🙁 @${username}, you have been set as unable to attend.`,
+                5000
+            );
+            ctx.answerCbQuery("✅ Status updated!");
+
+            updateGroupMessage(
+                ctx,
+                groups,
+                groupId,
+                memberNameMap,
+                groupMembersMap[groupId]
+            );
+
+            if (ctx.chat.type === "private") {
+                updateDmDateMessage(
+                    ctx,
+                    groups,
+                    groupId,
+                    availabilityMap,
+                    userId
+                );
+                updateDmAdvancedMessage(
+                    ctx,
+                    userId,
+                    memberActionableMessages,
+                    groupId,
+                    groups
+                );
+            }
+        }
+    }
 };
 
 const manageAdvanced = async (ctx, identifier) => {
@@ -830,7 +935,7 @@ const manageAdvanced = async (ctx, identifier) => {
     // console.log(groups[groupId])
 
     // todo add timeouts
-    const totalMembers = groupMembersMap[groupId]
+    const totalMembers = groupMembersMap[groupId];
     clearTimeout(memberTimeout[userId]);
     memberTimeout[userId] = setTimeout(() => {
         delete memberTimeout[userId];
@@ -916,7 +1021,7 @@ bot.on("text", (ctx) => {
         groups[groupId].scheduleByMember[userId][date] = sanitizedMessage;
         groups[groupId].scheduleByDate[date][userId] = sanitizedMessage;
 
-        const totalMembers = groupMembersMap[groupId]
+        const totalMembers = groupMembersMap[groupId];
 
         updateDmAdvancedMessage(
             ctx,
@@ -981,10 +1086,16 @@ const selectedDatesGenerator = (dates) => {
     return text;
 };
 
-const updateGroupMessage = (ctx, groups, linkedGroupId, memberNameMap, totalMembers) => {
+const updateGroupMessage = (
+    ctx,
+    groups,
+    linkedGroupId,
+    memberNameMap,
+    totalMembers
+) => {
     const { start, end } = groups[linkedGroupId].dates;
-    if (!totalMembers) totalMembers = 1000000
-    
+    if (!totalMembers) totalMembers = 1000000;
+
     // edit message in group - let everyone know
     let updatedMessage =
         `Gathering availability information for\n🗓 <b><u>${formatDate(
@@ -997,11 +1108,13 @@ const updateGroupMessage = (ctx, groups, linkedGroupId, memberNameMap, totalMemb
         listOfPeopleFormatGenerator(
             groups[linkedGroupId].scheduleByMember,
             groups[linkedGroupId].scheduleByDate,
-            memberNameMap,
-           
+            memberNameMap
         ) +
-        `👥 Responses: ${
-            Object.keys(groups[linkedGroupId].scheduleByMember).length
+        `\n<b><u>🙁 Unable to make it</u></b>\n` +
+        listOfUnableToMakeItGenerator(groups[linkedGroupId].cmi) +
+        `\n👥 Responses: ${
+            Object.keys(groups[linkedGroupId].scheduleByMember).length +
+            groups[linkedGroupId].cmi.length
         } / ${totalMembers}`;
     ctx.telegram
         .editMessageText(
@@ -1037,12 +1150,17 @@ const updateDmDateMessage = (
     } requests that you indicate your available dates from <b><u>${formatDate(
         start
     )}</u></b> to <b><u>${formatDate(end)}</u></b>.${selectDatesExplainerText}`;
-    for (let date of Object.keys(
-        groups[linkedGroupId].scheduleByMember[userId]
-    ).sort((a, b) => new Date(a) - new Date(b))) {
-        message += `${formatDate(date)} ${availabilityMap(
-            groups[linkedGroupId].scheduleByMember[userId][date]
-        )}\n`;
+
+    if (groups[linkedGroupId].cmi.includes(userId.toString())) {
+        message += `<b>🙁 Unable to make it</b>\n`;
+    } else {
+        for (let date of Object.keys(
+            groups[linkedGroupId].scheduleByMember[userId] || []
+        ).sort((a, b) => new Date(a) - new Date(b))) {
+            message += `${formatDate(date)} ${availabilityMap(
+                groups[linkedGroupId].scheduleByMember[userId][date]
+            )}\n`;
+        }
     }
 
     // message += selectedDatesGenerator(
@@ -1099,15 +1217,17 @@ const updateDmAdvancedMessage = (
 const listOfPeopleFormatGenerator = (
     scheduleByMember,
     scheduleByDate,
-    memberNameMap,
+    memberNameMap
 ) => {
+    let numberResponded = Object.keys(scheduleByMember).length;
 
-    let numberResponded = Object.keys(scheduleByMember).length
+    let listOfPeople = "☺️ <b><u>Availability list</u></b>\n";
 
-    let listOfPeople = "<b><u>Availability list</u></b>\n";
-    for (let date of Object.keys(scheduleByDate).sort(
+    let sortedByDate = Object.keys(scheduleByDate).sort(
         (a, b) => new Date(a) - new Date(b)
-    )) {
+    );
+    for (let i = 0; i < sortedByDate.length; i++) {
+        let date = sortedByDate[i];
         let numberOfAttendeesOnThisDate = Object.keys(
             scheduleByDate[date]
         ).length;
@@ -1151,10 +1271,14 @@ const listOfPeopleFormatGenerator = (
 
             text += "\n";
 
-            for (let userId in scheduleByDate[date]) {
-                text += `<a href='t.me/${memberNameMap[userId].username}'>${
-                    memberNameMap[userId].name
-                }</a> ${availabilityMap(scheduleByDate[date][userId])}\n`;
+            let userIdArray = Object.keys(scheduleByDate[date]);
+            for (let j = 0; j < userIdArray.length; j++) {
+                let userId = userIdArray[j];
+                text += `${j + 1}. <a href='t.me/${
+                    memberNameMap[userId].username
+                }'>${memberNameMap[userId].name}</a> ${availabilityMap(
+                    scheduleByDate[date][userId]
+                )}\n`;
             }
             listOfPeople += text;
             listOfPeople += `\n`;
@@ -1166,6 +1290,19 @@ const listOfPeopleFormatGenerator = (
     //     listOfPeople += "\n"
     // }
     // return listOfPeople
+};
+
+const listOfUnableToMakeItGenerator = (cmi) => {
+    let text = ``;
+
+    for (let i = 0; i < cmi.length; i++) {
+        let userId = cmi[i];
+        console.log({ userId, cmi, memberNameMap });
+        text += `${i + 1}. <a href='t.me/${memberNameMap[userId].username}'>${
+            memberNameMap[userId].name
+        }</a>\n`;
+    }
+    return text;
 };
 
 bot.launch().then(() => console.log("Bot is running!"));
