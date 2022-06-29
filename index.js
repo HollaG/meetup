@@ -109,8 +109,8 @@ const rangeCalendar = new Calendar(bot, {
     minDate: new Date(),
 });
 
-const selectDatesExplainerText = `\n\nPlease click on the dates on which you are available.\nTo reset, click the date again.\n\nUpdates will take ~1 second to be reflected - this is to prevent spam.\n\n<b><u>Available dates</u></b>\n`;
-const advancedExplainerText = `<i><b><u> Advanced options for dates </u></b></i>\n\nClick on the specific time for each date to <b><u>toggle your available state</u></b>.\nIf you are available for the whole day, do not click on any button.\n\nTo specify a custom message / period, click on the <b>《 Custom 》</b> button, then enter your message / period.`;
+const selectDatesExplainerText = `\n\nPlease click on the dates on which you are available.\nTo reset, click the date again.\n\nℹ Updates will take ~1 second to be reflected - this is to prevent spam.\n\n<b><u>Available dates</u></b>\n`;
+const advancedExplainerText = `<i><b><u>⚙️ Advanced options for dates ⚙️</u></b></i>\n\nℹ At least one date must be selected above!\n\n🕐 Click on the specific time for each date to <b><u>toggle your available state</u></b>.\nIf you are available for the whole day, do not click on any button.\n\n🔧 To specify a custom message, click on the <b>《 Custom 🔧 》</b> button, then enter your message.`;
 
 rangeCalendar.setDateListener((ctx, date) => {
     // handle calendar in groups
@@ -118,7 +118,7 @@ rangeCalendar.setDateListener((ctx, date) => {
         if (!groups[ctx.chat.id])
             return sendErrorMessage(
                 ctx,
-                "Sorry, there was an unexpected error. Have you started the bot with /start?"
+                "❗️ Error: Have you started the bot with /start?"
             );
 
         // check if the person who clicked is the person who started the calendar
@@ -131,7 +131,7 @@ rangeCalendar.setDateListener((ctx, date) => {
         if (!groups[ctx.chat.id].dates.start) {
             groups[ctx.chat.id].dates.start = date;
             ctx.replyWithHTML(
-                `You selected <u><b>${formatDate(
+                `✅ You selected <u><b>${formatDate(
                     date
                 )}</b></u> as the start date.\nPlease select the end date now.`,
                 {
@@ -139,7 +139,7 @@ rangeCalendar.setDateListener((ctx, date) => {
                         inline_keyboard: [
                             [
                                 {
-                                    text: "Reset",
+                                    text: "Reset 🔁",
                                     callback_data: "rst",
                                 },
                             ],
@@ -168,7 +168,7 @@ rangeCalendar.setDateListener((ctx, date) => {
             } else {
                 groups[ctx.chat.id].dates.end = date;
                 ctx.replyWithHTML(
-                    `You selected <b><u>${formatDate(
+                    `✅ You selected <b><u>${formatDate(
                         date
                     )}</u></b> as the end date.`,
                     {
@@ -176,12 +176,12 @@ rangeCalendar.setDateListener((ctx, date) => {
                             inline_keyboard: [
                                 [
                                     {
-                                        text: "Reset",
+                                        text: "Reset 🔁",
                                         callback_data: "rst",
                                     },
 
                                     {
-                                        text: "Confirm",
+                                        text: "Confirm ✅",
                                         callback_data: "cfm",
                                     },
                                 ],
@@ -218,7 +218,7 @@ rangeCalendar.setDateListener((ctx, date) => {
         if (!groups[linkedGroupId]) {
             return sendErrorMessage(
                 ctx,
-                "Error: No running calendar found!\n\nCheck if the calendar in the group has been stopped."
+                "❗️ Error: No running calendar found!\n\nCheck if the calendar in the group has been stopped."
             );
         }
         const { start, end } = groups[linkedGroupId].dates;
@@ -226,7 +226,7 @@ rangeCalendar.setDateListener((ctx, date) => {
         if (new Date(date) < new Date(start) || new Date(date) > new Date(end))
             return sendErrorMessage(
                 ctx,
-                `Error: Date is out of range! Please use the latest calendar to choose your dates.`
+                `❗️ Error: Date is out of range! Please use the latest calendar to choose your dates.`
             );
 
         // Clicking on the calendar toggles the user between 'free' and 'not free'.
@@ -257,7 +257,7 @@ rangeCalendar.setDateListener((ctx, date) => {
 
         // Handle response to user
         // if (!memberTimeout[userId]) ctx.replyWithChatAction("typing");
-
+        
         clearTimeout(memberTimeout[userId]);
         memberTimeout[userId] = setTimeout(() => {
             // after 1 seconds, update the messages
@@ -321,14 +321,15 @@ bot.start(async (ctx) => {
 
         if (memberToGroupMap[ctx.chat.id] === linkedGroupId) {
             // user already did /start, get them to reuse the old calendar
+            return sendErrorMessage(ctx, `❗️ You have already started the calendar!`)
         }
 
         memberToGroupMap[ctx.chat.id] = linkedGroupId;
         memberActionableMessages[ctx.chat.id] = {};
 
         const group = groups[linkedGroupId];
+        if (!group) return sendErrorMessage(ctx, `❗️ Error: No running calendar found!\n\nCheck if the calendar in the group has been stopped`)
         const { start, end } = group.dates;
-        if (!group) return console.log("error");
 
         rangeCalendar.setMinDate(new Date(start));
         rangeCalendar.setMaxDate(new Date(end));
@@ -346,9 +347,9 @@ bot.start(async (ctx) => {
         // ];
 
         const selectDatesMsg = await ctx.replyWithHTML(
-            `<i>Indicating dates for <b><u>${
+            `🗓 <i>Indicating dates for <b><u>${
                 groupNameMap[linkedGroupId]
-            }</u></b></i>\n\nHello! @${
+            }</u></b></i> 🗓\n\nHello! @${
                 group.creator.username
             } requests that you indicate your available dates from <b><u>${formatDate(
                 start
@@ -412,7 +413,7 @@ bot.start(async (ctx) => {
 
         const msg = await ctx.replyWithHTML(
             `
-                Hello, ${ctx.from.first_name}!\nPlease choose the date range you want to gather data for by clicking on the <b>start date</b>, and then the <b>end date</b>.\n\nType /stop to cancel.
+                Hello, ${ctx.from.first_name}!\nPlease choose the date range you want to gather data for by clicking on 1️⃣ the <b>start date</b>, and then 2️⃣ the <b>end date</b>.\n\n⏹ Type /stop to cancel.
         `,
             rangeCalendar.getCalendar()
         );
@@ -433,7 +434,7 @@ bot.command("stop", async (ctx) => {
             if (senderId === groups[groupId].creator.userId) {
                 // yes, stop it
                 // delete the calendar
-                console.log(groups[groupId]);
+            
                 let text = "Calendar stopped. Thank you for using!\n\n";
                 let totalMembers = await ctx.getChatMembersCount();
 
@@ -459,34 +460,34 @@ bot.command("stop", async (ctx) => {
                     ctx.chat.id,
                     groups[groupId].info_message.message_id,
                     null,
-                    `Availability gathering has stopped. Please refer to the latest message by the bot!`,
+                    `Availability gathering has stopped. Please refer to the latest message by the bot for the compiled availability list!`,
                     {
                         parse_mode: "HTML",
                     }
                 );
 
                 // edit all the messages sent to members
-                const memberIDs = Object.keys(groups[groupId].scheduleByMember)
-                memberIDs.forEach(memberId => { 
-                    if (memberMessageIDsToEditAfterStop[memberId]) { 
-                        memberMessageIDsToEditAfterStop[memberId].forEach(messageId => { 
-                            ctx.telegram.editMessageText(
-                                memberId,
-                                messageId,
-                                null,
-                                `Availability gathering has stopped. Please refer to the latest message by the bot for the compiled availability list!`
-                                
-                            );
-                        })
+                const memberIDs = Object.keys(groups[groupId].scheduleByMember);
+                memberIDs.forEach((memberId) => {
+                    if (memberMessageIDsToEditAfterStop[memberId]) {
+                        memberMessageIDsToEditAfterStop[memberId].forEach(
+                            (messageId) => {
+                                ctx.telegram.editMessageText(
+                                    memberId,
+                                    messageId,
+                                    null,
+                                    `Availability gathering has stopped. Please refer to the latest message by the bot for the compiled availability list!`,
+                                    {
+                                        parse_mode: "HTML",
+                                    }
+                                );
+                            }
+                        );
                     }
-                })
+                });
 
                 delete groups[groupId];
-
             } else {
-
-
-
                 ctx.reply(
                     `Sorry, only the calendar creator can stop this calendar.`
                 );
@@ -521,7 +522,7 @@ bot.on("callback_query", (ctx) => {
     // console.log("Recieved callback button", ctx.update.callback_query);
 
     const identifier = ctx.update.callback_query.data;
-    if (identifier.startsWith("adv_ignore")) return;
+    if (identifier.startsWith("adv_ignore")) return ctx.answerCbQuery();
 
     if (identifier.startsWith("adv_")) {
         manageAdvanced(ctx, identifier);
@@ -556,17 +557,19 @@ const resetRange = async (ctx) => {
     };
     await ctx
         .reply(
-            `Dates have been reset. Please select the start date.`
+            `🔁 Dates have been reset. Please select the start date.`
             // rangeCalendar.getCalendar()
         )
         .then((message) => {
             groups[ctx.chat.id].messageIdsForDeletion.push(message.message_id);
         });
+
+    ctx.answerCbQuery()
 };
 
 const launchWaitingForOthers = async (ctx) => {
     if (!groups[ctx.chat.id]?.dates.start || !groups[ctx.chat.id]?.dates.end) {
-        sendErrorMessage(ctx, `Error: Missing start and end dates!`);
+        sendErrorMessage(ctx, `❗️ Error: Missing start and end dates!`);
         return;
     }
 
@@ -584,11 +587,11 @@ const launchWaitingForOthers = async (ctx) => {
 
     // send message to group which will contain the people info
     const msg = await ctx.replyWithHTML(
-        `Gathering availability information for\n<b><u>${formatDate(
+        `Gathering availability information for\n🗓 <b><u>${formatDate(
             start
         )}</u></b> to <b><u>${formatDate(
             end
-        )}</u></b>.\n\nMembers, please indicate your available dates in this range by clicking on the button below.\n\n@${
+        )}</u></b> 🗓\n\nMembers, please indicate your available dates in this range by clicking on the button below.\n\n⏹ @${
             groups[ctx.chat.id].creator.username
         }: Type /stop when you are done collecting info.\n\n`,
         {
@@ -596,7 +599,7 @@ const launchWaitingForOthers = async (ctx) => {
                 inline_keyboard: [
                     [
                         {
-                            text: "Indicate availability",
+                            text: "🗓 Indicate availability",
                             url: `https://t.me/meetup_plannerbot?start=${ctx.chat.id}`,
                         },
                     ],
@@ -606,6 +609,7 @@ const launchWaitingForOthers = async (ctx) => {
     );
 
     groups[ctx.chat.id].info_message = msg;
+    ctx.answerCbQuery()
 };
 
 const launchAdvanced = (ctx) => {
@@ -613,7 +617,7 @@ const launchAdvanced = (ctx) => {
     const userId = ctx.chat.id;
     const groupId = memberToGroupMap[userId];
 
-    if (!groupId) return sendErrorMessage(ctx, `Error: no linked group!`);
+    if (!groupId) return sendErrorMessage(ctx, `❗️ Error: no linked group!`);
 
     const advancedMarkup = advancedMarkupGenerator(userId, groupId, groups);
 
@@ -627,6 +631,8 @@ const launchAdvanced = (ctx) => {
         groupId,
         groups
     );
+
+    ctx.answerCbQuery()
 };
 
 const manageAdvanced = async (ctx, identifier) => {
@@ -634,11 +640,11 @@ const manageAdvanced = async (ctx, identifier) => {
 
     const groupId = memberToGroupMap[userId];
 
-    if (!groupId) return sendErrorMessage(ctx, `Error: no linked group!`);
+    if (!groupId) return sendErrorMessage(ctx, `❗️ Error: no linked group!`);
     if (!groups[groupId]) {
         return sendErrorMessage(
             ctx,
-            `Error: No running calendar found!\n\nCheck if the calendar in the group has been stopped.`
+            `❗️ Error: No running calendar found!\n\nCheck if the calendar in the group has been stopped.`
         );
     }
     let status1 = groups[groupId]?.scheduleByDate?.[date]?.[userId];
@@ -646,7 +652,7 @@ const manageAdvanced = async (ctx, identifier) => {
     if (!status1) {
         return sendErrorMessage(
             ctx,
-            `Error: Please do not re-use old calendars!`
+            `❗️ Error: Please do not re-use old calendars!`
         );
     }
 
@@ -726,7 +732,7 @@ const manageAdvanced = async (ctx, identifier) => {
                 // );
             });
         }
-
+        ctx.answerCbQuery()
         return;
     }
 
@@ -738,6 +744,8 @@ const manageAdvanced = async (ctx, identifier) => {
         groups[groupId].scheduleByDate[date][userId] = finalStatus;
         groups[groupId].scheduleByMember[userId][date] = finalStatus;
     }
+
+    ctx.answerCbQuery("✅ Status updated!");
 
     // console.log("-----------------------")
     // console.log(groups[groupId])
@@ -790,7 +798,7 @@ bot.on("text", (ctx) => {
 
             sendErrorMessage(
                 ctx,
-                `Error: No running calendar found!\n\nCheck if the calendar in the group has been stopped.`
+                `❗️ Error: No running calendar found!\n\nCheck if the calendar in the group has been stopped.`
             );
             delete memberInputCustomMessage[userId];
             delete memberActionableMessages[userId].custom_prompt;
@@ -823,7 +831,7 @@ bot.on("text", (ctx) => {
 
         delete memberInputCustomMessage[userId];
         delete memberActionableMessages[userId].custom_prompt;
-        if (!groupId) return sendErrorMessage(ctx, `Error: no linked group!`);
+        if (!groupId) return sendErrorMessage(ctx, `❗️ Error: no linked group!`);
 
         groups[groupId].scheduleByMember[userId][date] = sanitizedMessage;
         groups[groupId].scheduleByDate[date][userId] = sanitizedMessage;
@@ -896,11 +904,11 @@ const updateGroupMessage = (ctx, groups, linkedGroupId, memberNameMap) => {
 
     // edit message in group - let everyone know
     let updatedMessage =
-        `Gathering availability information for\n<b><u>${formatDate(
+        `Gathering availability information for\n🗓 <b><u>${formatDate(
             start
         )}</u></b> to <b><u>${formatDate(
             end
-        )}</u></b>.\n\nMembers, please indicate your available dates by clicking on the button below.\n\n@${
+        )}</u></b> 🗓\n\nMembers, please indicate your available dates by clicking on the button below.\n\n⏹ @${
             groups[linkedGroupId].creator.username
         }: Type /stop when you are done collecting info.\n\n` +
         listOfPeopleFormatGenerator(
@@ -938,7 +946,7 @@ const updateDmDateMessage = (
 ) => {
     const { start, end } = groups[linkedGroupId].dates;
 
-    let message = `<i>Indicating dates for <b><u>${
+    let message = `🗓 <i>Indicating dates for <b><u>${
         groupNameMap[linkedGroupId]
     }</u></b></i>\n\nHello! @${
         groups[linkedGroupId].creator.username
@@ -1078,3 +1086,8 @@ bot.launch().then(() => console.log("Bot is running!"));
 // Enable graceful stop
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
+
+process.on("uncaughtException", console.log)
+process.on("unhandledRejection", console.log)
+process.on("warning", console.log)
+process.on("error", console.log)
