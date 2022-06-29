@@ -6,9 +6,18 @@ const {
     formatDate,
     editErrorHandler,
     keyFilterByProperty,
+    advancedMarkupGenerator,
+    sendAutoDeleteMessage,
 } = require("./functions");
 
-require('dotenv').config();
+require("dotenv").config();
+
+const sanitizeHtml = require("sanitize-html");
+const sanitizeOptions = {
+    allowedTags: [],
+    allowedAttributes: {},
+};
+
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const dates = {};
 const messageIdsForDeletion = {};
@@ -20,7 +29,15 @@ const groups = {};
 // 2: Available (morning/afternoon)
 // 3: Available (evening/night)
 
-const availabilityMap = ["(Unavailable)", "", "(Day)", "(Night)"];
+const availabilityArrayMap = ["(Unavailable)", "", "(Day)", "(Night)"];
+const availabilityMap = (availablilityType) => {
+    // availabilityType can be 0, 1, 2, 3, or string (when custom reason)
+    if (typeof availablilityType === "string") {
+        return `(${availablilityType})`;
+    } else {
+        return availabilityArrayMap[availablilityType];
+    }
+};
 
 const DEFAULT_USER_OBJECT = {
     dates: {},
@@ -66,17 +83,43 @@ let memberTimeout = {};
 //     "memberId": setTimeout()
 // }
 
+let memberActionableMessages = {};
+// {
+//     "memberId": {
+//         "select_dates": "message",
+//         "advanced": "message",
+//         "custom_prompt": "message"
+//     }
+// }
+
+let memberInputCustomMessage = {};
+// {
+//     "memberId": {
+//         "date": "yyyy-MM-yy",
+//         "messageId": ""
+//     }
+// }
+
+const memberMessageIDsToEditAfterStop = {};
+// {
+//     "memberId": ["messageId"]
+// }
+
 const rangeCalendar = new Calendar(bot, {
     minDate: new Date(),
 });
 
-const pmExplainerText = `\n\nPlease click on the dates on which you are available. \nIf you are only available in the <b>day</b>, click <b>once (1)</b> more.\nIf you are only available in the <b>night</b>, click <b>twice (2)</b> more instead.\nTo reset, click the date <b>three (3)</b> times.\n\nUpdates will take ~1 second to be reflected - this is to prevent spam.\n\n<b><u>Available dates</u></b>\n`;
+const selectDatesExplainerText = `\n\nPlease click on the dates on which you are available.\nTo reset, click the date again.\n\nUpdates will take ~1 second to be reflected - this is to prevent spam.\n\n<b><u>Available dates</u></b>\n`;
+const advancedExplainerText = `<i><b><u> Advanced options for dates </u></b></i>\n\nClick on the specific time for each date to <b><u>toggle your available state</u></b>.\nIf you are available for the whole day, do not click on any button.\n\nTo specify a custom message / period, click on the <b>《 Custom 》</b> button, then enter your message / period.`;
 
-rangeCalendar.setDateListener(async (ctx, date) => {
+rangeCalendar.setDateListener((ctx, date) => {
     // handle calendar in groups
     if (ctx.chat.type === "group" || ctx.chat.type === "supergroup") {
-
-        if (!groups[ctx.chat.id]) return sendErrorMessage(ctx, "Sorry, there was an unexpected error. Have you started the bot with /start?")
+        if (!groups[ctx.chat.id])
+            return sendErrorMessage(
+                ctx,
+                "Sorry, there was an unexpected error. Have you started the bot with /start?"
+            );
 
         // check if the person who clicked is the person who started the calendar
         if (ctx.from.id !== groups[ctx.chat.id].creator.userId)
@@ -172,6 +215,12 @@ rangeCalendar.setDateListener(async (ctx, date) => {
             );
         const linkedGroupName = groupNameMap[linkedGroupId];
 
+        if (!groups[linkedGroupId]) {
+            return sendErrorMessage(
+                ctx,
+                "Error: No running calendar found!\n\nCheck if the calendar in the group has been stopped."
+            );
+        }
         const { start, end } = groups[linkedGroupId].dates;
 
         if (new Date(date) < new Date(start) || new Date(date) > new Date(end))
@@ -180,6 +229,7 @@ rangeCalendar.setDateListener(async (ctx, date) => {
                 `Error: Date is out of range! Please use the latest calendar to choose your dates.`
             );
 
+        // Clicking on the calendar toggles the user between 'free' and 'not free'.
         if (!groups[linkedGroupId].scheduleByDate[date])
             // if user hasn't typed anything yet, add it here
             groups[linkedGroupId].scheduleByDate[date] = {};
@@ -191,84 +241,56 @@ rangeCalendar.setDateListener(async (ctx, date) => {
             groups[linkedGroupId].scheduleByDate[date][userId] = 1;
             groups[linkedGroupId].scheduleByMember[userId][date] = 1;
         } else {
-            if (groups[linkedGroupId].scheduleByDate[date][userId] === 3) {
-                delete groups[linkedGroupId].scheduleByDate[date][userId];
-                delete groups[linkedGroupId].scheduleByMember[userId][date];
-            } else {
-                groups[linkedGroupId].scheduleByDate[date][userId]++;
-                groups[linkedGroupId].scheduleByMember[userId][date]++;
-            }
+            delete groups[linkedGroupId].scheduleByDate[date][userId];
+            delete groups[linkedGroupId].scheduleByMember[userId][date];
+
+            // if (groups[linkedGroupId].scheduleByDate[date][userId] === 3) {
+            //     delete groups[linkedGroupId].scheduleByDate[date][userId];
+            //     delete groups[linkedGroupId].scheduleByMember[userId][date];
+            // } else {
+            //     groups[linkedGroupId].scheduleByDate[date][userId]++;
+            //     groups[linkedGroupId].scheduleByMember[userId][date]++;
+            // }
         }
 
-        let message = `<i>Indicating dates for <b><u>${
-            groupNameMap[linkedGroupId]
-        }</u></b></i>\n\nHello! @${
-            groups[linkedGroupId].creator.username
-        } requests that you indicate your available dates from <b><u>${formatDate(
-            start
-        )}</u></b> to <b><u>${formatDate(end)}</u></b>.${pmExplainerText}`;
-        for (let date of Object.keys(
-            groups[linkedGroupId].scheduleByMember[userId]
-        ).sort((a, b) => new Date(a) - new Date(b))) {
-            message += `${formatDate(date)} ${
-                availabilityMap[
-                    groups[linkedGroupId].scheduleByMember[userId][date]
-                ]
-            }\n`;
-        }
+        // const totalMembers = await ctx.getChatMembersCount();
 
-        // message += selectedDatesGenerator(
-        //     Object.keys(groups[linkedGroupId].scheduleByMember[userId])
-        // );
-
-        const totalMembers = await ctx.getChatMembersCount();
+        // Handle response to user
+        // if (!memberTimeout[userId]) ctx.replyWithChatAction("typing");
 
         clearTimeout(memberTimeout[userId]);
         memberTimeout[userId] = setTimeout(() => {
             // after 1 seconds, update the messages
             console.log("Updating messages...");
+
             memberTimeout[userId] = null;
 
             // edit message in DM - let the user know their availability
-            ctx.editMessageText(message, {
-                reply_markup: ctx.update.callback_query.message.reply_markup,
-                parse_mode: "HTML",
-                disable_web_page_preview: true,
-            }).catch(editErrorHandler);
+            updateDmDateMessage(
+                ctx,
+                groups,
+                linkedGroupId,
+                availabilityMap,
+                userId
+            );
 
             // edit message in group - let everyone know
-            let updatedMessage =
-                `Gathering availability information for\n<b><u>${formatDate(
-                    start
-                )}</u></b> to <b><u>${formatDate(
-                    end
-                )}</u></b>.\n\nMembers, please indicate your available dates by clicking on the button below.\n\n@${
-                    groups[linkedGroupId].creator.username
-                }: Type /stop when you are done collecting info.\n\n` +
-                listOfPeopleFormatGenerator(
-                    groups[linkedGroupId].scheduleByDate,
-                    memberNameMap,
-                    totalMembers
-                ) +
-                `👥 Responses: ${
-                    Object.keys(groups[linkedGroupId].scheduleByMember).length
-                }/${totalMembers}`;
-            ctx.telegram
-                .editMessageText(
-                    groups[linkedGroupId].info_message.chat.id,
-                    groups[linkedGroupId].info_message.message_id,
+            updateGroupMessage(
+                ctx,
 
-                    null,
-                    updatedMessage,
+                groups,
+                linkedGroupId,
+                memberNameMap
+            );
 
-                    {
-                        reply_markup:
-                            groups[linkedGroupId].info_message.reply_markup,
-                        parse_mode: "HTML",
-                        disable_web_page_preview: true,
-                    }
-                )
-                .catch(editErrorHandler);
+            // update the advanced message
+            updateDmAdvancedMessage(
+                ctx,
+                userId,
+                memberActionableMessages,
+                linkedGroupId,
+                groups
+            );
         }, 1000);
     }
 
@@ -302,6 +324,7 @@ bot.start(async (ctx) => {
         }
 
         memberToGroupMap[ctx.chat.id] = linkedGroupId;
+        memberActionableMessages[ctx.chat.id] = {};
 
         const group = groups[linkedGroupId];
         const { start, end } = group.dates;
@@ -310,24 +333,55 @@ bot.start(async (ctx) => {
         rangeCalendar.setMinDate(new Date(start));
         rangeCalendar.setMaxDate(new Date(end));
 
-        // for future - when adding refresh button when ability to change date range is implemented
-        // const calendarMarkup = rangeCalendar.getCalendar().reply_markup.inline_keyboard
-        // const finalMarkup = [[{
-        //     text: "Refresh",
-        //     callback_data: "refresh",
-        // }], ...calendarMarkup]
+        // const calendarMarkup =
+        //     rangeCalendar.getCalendar().reply_markup.inline_keyboard;
+        // const finalMarkup = [
+        //     [
+        //         {
+        //             text: "Update advanced options 🔄",
+        //             callback_data: "adv",
+        //         },
+        //     ],
+        //     ...calendarMarkup,
+        // ];
 
-        ctx.replyWithHTML(
+        const selectDatesMsg = await ctx.replyWithHTML(
             `<i>Indicating dates for <b><u>${
                 groupNameMap[linkedGroupId]
             }</u></b></i>\n\nHello! @${
                 group.creator.username
             } requests that you indicate your available dates from <b><u>${formatDate(
                 start
-            )}</u></b> to <b><u>${formatDate(end)}</u></b>.${pmExplainerText}`,
+            )}</u></b> to <b><u>${formatDate(
+                end
+            )}</u></b>.${selectDatesExplainerText}`,
 
             rangeCalendar.getCalendar()
         );
+        memberActionableMessages[ctx.chat.id].select_dates = selectDatesMsg;
+
+        const advancedMsg = await ctx.replyWithHTML(
+            `${advancedExplainerText}`
+            // {
+            //     reply_markup: {
+            //         inline_keyboard: [
+            //             [
+            //                 {
+            //                     text: "Update advanced options 🔄",
+            //                     callback_data: "adv",
+            //                 },
+            //             ],
+            //         ],
+            //     },
+            // }
+        );
+        memberActionableMessages[ctx.chat.id].advanced = advancedMsg;
+
+        // add these two messages to the messagesToEdit
+        memberMessageIDsToEditAfterStop[ctx.chat.id] = [
+            selectDatesMsg.message_id,
+            advancedMsg.message_id,
+        ];
     } else if (chat.type === "group" || chat.type === "supergroup") {
         // Check if there already is a running calendar in the group
         if (groups[chat.id]) {
@@ -367,7 +421,6 @@ bot.start(async (ctx) => {
 });
 
 bot.command("stop", async (ctx) => {
-    // stop can only run in a group and only the group owner can stop the calendar (todo)
     if (ctx.chat.type === "group" || ctx.chat.type === "supergroup") {
         const groupId = ctx.chat.id;
 
@@ -380,8 +433,7 @@ bot.command("stop", async (ctx) => {
             if (senderId === groups[groupId].creator.userId) {
                 // yes, stop it
                 // delete the calendar
-                // ctx.telegram.editMessageText(groupId, groups[groupId].info_message.message_id, undefined, "Calendar stopped, todo - add the ");
-
+                console.log(groups[groupId]);
                 let text = "Calendar stopped. Thank you for using!\n\n";
                 let totalMembers = await ctx.getChatMembersCount();
 
@@ -400,12 +452,41 @@ bot.command("stop", async (ctx) => {
                         );
                     text += addText;
                 }
-                const finalMsg = await ctx.replyWithHTML(text, { disable_web_page_preview: true });              
-                ctx.telegram.editMessageText(ctx.chat.id, groups[groupId].info_message.message_id, null, `Availability gathering has stopped. Please refer to the latest message by the bot!`, {
-                    parse_mode: "HTML"
+                const finalMsg = await ctx.replyWithHTML(text, {
+                    disable_web_page_preview: true,
+                });
+                ctx.telegram.editMessageText(
+                    ctx.chat.id,
+                    groups[groupId].info_message.message_id,
+                    null,
+                    `Availability gathering has stopped. Please refer to the latest message by the bot!`,
+                    {
+                        parse_mode: "HTML",
+                    }
+                );
+
+                // edit all the messages sent to members
+                const memberIDs = Object.keys(groups[groupId].scheduleByMember)
+                memberIDs.forEach(memberId => { 
+                    if (memberMessageIDsToEditAfterStop[memberId]) { 
+                        memberMessageIDsToEditAfterStop[memberId].forEach(messageId => { 
+                            ctx.telegram.editMessageText(
+                                memberId,
+                                messageId,
+                                null,
+                                `Availability gathering has stopped. Please refer to the latest message by the bot for the compiled availability list!`
+                                
+                            );
+                        })
+                    }
                 })
+
                 delete groups[groupId];
+
             } else {
+
+
+
                 ctx.reply(
                     `Sorry, only the calendar creator can stop this calendar.`
                 );
@@ -419,10 +500,34 @@ bot.command("stop", async (ctx) => {
     }
 });
 
+bot.command("cancel", async (ctx) => {
+    // only run in private
+    if (ctx.chat.type === "private") {
+        // only run if there is a pending prompt in memberInputCustomMessage
+        if (memberInputCustomMessage[ctx.chat.id]) {
+            // yes, cancel it
+            ctx.telegram.deleteMessage(
+                ctx.chat.id,
+                memberInputCustomMessage[ctx.chat.id].messageId
+            );
+            delete memberInputCustomMessage[ctx.chat.id];
+            ctx.deleteMessage();
+        }
+    }
+});
+
 bot.on("callback_query", (ctx) => {
     // ctx.reply(`You chose ${ctx.update.callback_query.data}`);
+    // console.log("Recieved callback button", ctx.update.callback_query);
 
-    switch (ctx.update.callback_query.data) {
+    const identifier = ctx.update.callback_query.data;
+    if (identifier.startsWith("adv_ignore")) return;
+
+    if (identifier.startsWith("adv_")) {
+        manageAdvanced(ctx, identifier);
+    }
+
+    switch (identifier) {
         case "rst": {
             resetRange(ctx);
             break;
@@ -430,6 +535,9 @@ bot.on("callback_query", (ctx) => {
         case "cfm": {
             launchWaitingForOthers(ctx);
             break;
+        }
+        case "adv": {
+            launchAdvanced(ctx);
         }
     }
 });
@@ -500,6 +608,238 @@ const launchWaitingForOthers = async (ctx) => {
     groups[ctx.chat.id].info_message = msg;
 };
 
+const launchAdvanced = (ctx) => {
+    // refresh the advanced message
+    const userId = ctx.chat.id;
+    const groupId = memberToGroupMap[userId];
+
+    if (!groupId) return sendErrorMessage(ctx, `Error: no linked group!`);
+
+    const advancedMarkup = advancedMarkupGenerator(userId, groupId, groups);
+
+    if (!advancedMarkup)
+        return sendErrorMessage(ctx, `Please select a date first!`);
+
+    updateDmAdvancedMessage(
+        ctx,
+        userId,
+        memberActionableMessages,
+        groupId,
+        groups
+    );
+};
+
+const manageAdvanced = async (ctx, identifier) => {
+    let [_, type, date, userId] = identifier.split("_");
+
+    const groupId = memberToGroupMap[userId];
+
+    if (!groupId) return sendErrorMessage(ctx, `Error: no linked group!`);
+    if (!groups[groupId]) {
+        return sendErrorMessage(
+            ctx,
+            `Error: No running calendar found!\n\nCheck if the calendar in the group has been stopped.`
+        );
+    }
+    let status1 = groups[groupId]?.scheduleByDate?.[date]?.[userId];
+
+    if (!status1) {
+        return sendErrorMessage(
+            ctx,
+            `Error: Please do not re-use old calendars!`
+        );
+    }
+
+    // console.log("-----------------------")
+    // console.log(groups[groupId])
+    // console.log("Type is ", type, status1, status2)
+
+    let finalStatus;
+    if (type === "day") {
+        // toggle the 'day' status
+        // if status was 1 (full), set to 3
+        // if status was 2 (day), set to 0
+        // if status was 3 (night), set to 1
+        // if status was text (custom), set to 2
+
+        if (status1 === 1) {
+            finalStatus = 3;
+        } else if (status1 === 2) {
+            finalStatus = 0;
+        } else if (status1 === 3) {
+            finalStatus = 1;
+        } else {
+            finalStatus = 2;
+        }
+    } else if (type === "night") {
+        // toggle the 'night' status
+        // if status was 1 (full), set to 2
+        // if status was 2 (day), set to 1
+        // if status was 3 (night), set to 0
+        // if status was text (custom), set to 3
+
+        if (status1 === 1) {
+            finalStatus = 2;
+        } else if (status1 === 2) {
+            finalStatus = 1;
+        } else if (status1 === 3) {
+            finalStatus = 0;
+        } else {
+            finalStatus = 3;
+        }
+    } else if (type === "custom") {
+        finalStatus === -1;
+
+        if (memberInputCustomMessage[userId]) {
+            // already prompted to, tell them to cancel first
+
+            sendAutoDeleteMessage(
+                ctx,
+                `Please cancel the current action with /cancel first!.`,
+                5000
+            );
+        } else {
+            ctx.replyWithHTML(
+                `Please type your custom message for <b><u>${formatDate(
+                    date
+                )}</u></b> now.\n\nType /cancel to cancel this action.`
+            ).then((msg) => {
+                memberInputCustomMessage[userId] = {
+                    messageId: msg.message_id,
+                    date: date,
+                };
+
+                // setTimeout(
+                //     () => {
+                //         if (memberInputCustomMessage[userId]) {
+                //             // might've already been deleted by other means (when the user enters their own message)
+                //             ctx.deleteMessage(msg.message_id);
+
+                //             if (memberInputCustomMessage[userId].date === date) {
+                //                 delete memberInputCustomMessage[userId];
+                //             }
+                //         }
+                //     },
+                //     30000,
+                //     date,
+                //     msg
+                // );
+            });
+        }
+
+        return;
+    }
+
+    // if user ends up not attending, delete
+    if (finalStatus === 0) {
+        delete groups[groupId].scheduleByDate[date][userId];
+        delete groups[groupId].scheduleByMember[userId][date];
+    } else if (finalStatus !== -1) {
+        groups[groupId].scheduleByDate[date][userId] = finalStatus;
+        groups[groupId].scheduleByMember[userId][date] = finalStatus;
+    }
+
+    // console.log("-----------------------")
+    // console.log(groups[groupId])
+
+    // todo add timeouts
+
+    clearTimeout(memberTimeout[userId]);
+    memberTimeout[userId] = setTimeout(() => {
+        delete memberTimeout[userId];
+        updateDmAdvancedMessage(
+            ctx,
+            userId,
+            memberActionableMessages,
+            groupId,
+            groups
+        );
+        updateDmDateMessage(ctx, groups, groupId, availabilityMap, userId);
+        updateGroupMessage(ctx, groups, groupId, memberNameMap);
+    }, 1000);
+};
+
+bot.on("text", (ctx) => {
+    // listener, only activate if 1) is DM, 2) userId in memberInputCustomMessage
+    const userId = ctx.chat.id;
+
+    if (ctx.chat.type === "private" && memberInputCustomMessage[ctx.chat.id]) {
+        // todo - add sanitization and checks
+        ctx.deleteMessage();
+        const sanitizedMessage = sanitizeHtml(
+            ctx.message.text,
+            sanitizeOptions
+        ).trim();
+        if (sanitizedMessage.length > 64) {
+            return sendErrorMessage(
+                ctx,
+                `Custom message too long! Maximum of 64 characters allowed. Please try again.`
+            );
+        }
+
+        if (sanitizedMessage.length === 0) {
+            return sendErrorMessage(
+                ctx,
+                `Custom message cannot be empty! Please try again.`
+            );
+        }
+        const groupId = memberToGroupMap[userId];
+
+        if (!groups[groupId]) {
+            // no group linked - the calendar could have been stopped?
+
+            sendErrorMessage(
+                ctx,
+                `Error: No running calendar found!\n\nCheck if the calendar in the group has been stopped.`
+            );
+            delete memberInputCustomMessage[userId];
+            delete memberActionableMessages[userId].custom_prompt;
+            return;
+        }
+
+        const date = memberInputCustomMessage[userId].date;
+
+        if (
+            sanitizedMessage === groups[groupId].scheduleByMember[userId][date]
+        ) {
+            return sendErrorMessage(
+                ctx,
+                `New custom message cannot be the same as the old one!`
+            );
+        }
+
+        sendAutoDeleteMessage(
+            ctx,
+            `Your custom message for ${formatDate(
+                date
+            )} has been received.\n\n${sanitizedMessage}`,
+            5000
+        );
+
+        ctx.telegram.deleteMessage(
+            userId,
+            memberInputCustomMessage[userId].messageId
+        );
+
+        delete memberInputCustomMessage[userId];
+        delete memberActionableMessages[userId].custom_prompt;
+        if (!groupId) return sendErrorMessage(ctx, `Error: no linked group!`);
+
+        groups[groupId].scheduleByMember[userId][date] = sanitizedMessage;
+        groups[groupId].scheduleByDate[date][userId] = sanitizedMessage;
+
+        updateDmAdvancedMessage(
+            ctx,
+            userId,
+            memberActionableMessages,
+            groupId,
+            groups
+        );
+        updateDmDateMessage(ctx, groups, groupId, availabilityMap, userId);
+        updateGroupMessage(ctx, groups, groupId, memberNameMap);
+    }
+});
+
 // unused for now
 const selectedDatesGenerator = (dates) => {
     // dates: "yyyy-MM-dd"[] (unsorted)
@@ -551,6 +891,119 @@ const selectedDatesGenerator = (dates) => {
     return text;
 };
 
+const updateGroupMessage = (ctx, groups, linkedGroupId, memberNameMap) => {
+    const { start, end } = groups[linkedGroupId].dates;
+
+    // edit message in group - let everyone know
+    let updatedMessage =
+        `Gathering availability information for\n<b><u>${formatDate(
+            start
+        )}</u></b> to <b><u>${formatDate(
+            end
+        )}</u></b>.\n\nMembers, please indicate your available dates by clicking on the button below.\n\n@${
+            groups[linkedGroupId].creator.username
+        }: Type /stop when you are done collecting info.\n\n` +
+        listOfPeopleFormatGenerator(
+            groups[linkedGroupId].scheduleByDate,
+            memberNameMap,
+            10 // TODO
+        ) +
+        `👥 Responses: ${
+            Object.keys(groups[linkedGroupId].scheduleByMember).length
+        }`;
+    ctx.telegram
+        .editMessageText(
+            groups[linkedGroupId].info_message.chat.id,
+            groups[linkedGroupId].info_message.message_id,
+
+            null,
+            updatedMessage,
+
+            {
+                reply_markup: groups[linkedGroupId].info_message.reply_markup,
+                parse_mode: "HTML",
+                disable_web_page_preview: true,
+            }
+        )
+        .catch((e) => editErrorHandler(e, ctx));
+};
+
+const updateDmDateMessage = (
+    ctx,
+    groups,
+    linkedGroupId,
+    availabilityMap,
+
+    userId
+) => {
+    const { start, end } = groups[linkedGroupId].dates;
+
+    let message = `<i>Indicating dates for <b><u>${
+        groupNameMap[linkedGroupId]
+    }</u></b></i>\n\nHello! @${
+        groups[linkedGroupId].creator.username
+    } requests that you indicate your available dates from <b><u>${formatDate(
+        start
+    )}</u></b> to <b><u>${formatDate(end)}</u></b>.${selectDatesExplainerText}`;
+    for (let date of Object.keys(
+        groups[linkedGroupId].scheduleByMember[userId]
+    ).sort((a, b) => new Date(a) - new Date(b))) {
+        message += `${formatDate(date)} ${availabilityMap(
+            groups[linkedGroupId].scheduleByMember[userId][date]
+        )}\n`;
+    }
+
+    // message += selectedDatesGenerator(
+    //     Object.keys(groups[linkedGroupId].scheduleByMember[userId])
+    // );
+
+    // edit message in DM - let the user know their availability
+
+    ctx.telegram
+        .editMessageText(
+            ctx.chat.id,
+            memberActionableMessages[ctx.chat.id].select_dates.message_id,
+            null,
+            message,
+            {
+                reply_markup:
+                    memberActionableMessages[ctx.chat.id].select_dates
+                        .reply_markup,
+                parse_mode: "HTML",
+                disable_web_page_preview: true,
+            }
+        )
+        .catch((e) => editErrorHandler(e, ctx));
+};
+
+const updateDmAdvancedMessage = (
+    ctx,
+    userId,
+    memberActionableMessages,
+    groupId,
+    groups
+) => {
+    // Update the advanced text message
+    const advancedMarkup = advancedMarkupGenerator(userId, groupId, groups);
+    if (!advancedMarkup)
+        return sendErrorMessage(ctx, `Please select a date first!`);
+
+    ctx.telegram
+        .editMessageText(
+            userId,
+            memberActionableMessages[userId].advanced.message_id,
+            null,
+            memberActionableMessages[userId].advanced.text,
+            {
+                reply_markup: {
+                    inline_keyboard: advancedMarkup,
+                },
+                entities: memberActionableMessages[userId].advanced.entities,
+            }
+        )
+        .catch((e) => editErrorHandler(e, ctx));
+};
+
 const listOfPeopleFormatGenerator = (
     scheduleByDate,
     memberNameMap,
@@ -567,10 +1020,18 @@ const listOfPeopleFormatGenerator = (
         if (numberOfAttendeesOnThisDate > 0) {
             let text = `<b>${formatDate(date)}</b> `;
 
-            let numberAttending = keyFilterByProperty(scheduleByDate[date], [1]).length // returns array of ids where the person is attending the whole
-            let numberAttendingDay = keyFilterByProperty(scheduleByDate[date], [1, 2]).length // returns ids of persons attending either whole or day
-            let numberAttendingNight = keyFilterByProperty(scheduleByDate[date], [1, 3]).length // returns ids of persons attending either whole or night
-            
+            let numberAttending = keyFilterByProperty(scheduleByDate[date], [
+                1,
+            ]).length; // returns array of ids where the person is attending the whole
+            let numberAttendingDay = keyFilterByProperty(
+                scheduleByDate[date],
+                [1, 2]
+            ).length; // returns ids of persons attending either whole or day
+            let numberAttendingNight = keyFilterByProperty(
+                scheduleByDate[date],
+                [1, 3]
+            ).length; // returns ids of persons attending either whole or night
+
             let percentAttending = Math.floor(
                 (numberAttending / totalMembers) * 100
             );
@@ -583,7 +1044,11 @@ const listOfPeopleFormatGenerator = (
             );
 
             // take the highest of the 3
-            let finalPercent = Math.max(percentAttendingDay, percentAttendingNight, percentAttending);
+            let finalPercent = Math.max(
+                percentAttendingDay,
+                percentAttendingNight,
+                percentAttending
+            );
 
             if (finalPercent === 100) text += "😄";
             else if (finalPercent >= 75) text += "😀";
@@ -594,7 +1059,7 @@ const listOfPeopleFormatGenerator = (
             for (let userId in scheduleByDate[date]) {
                 text += `<a href='t.me/${memberNameMap[userId].username}'>${
                     memberNameMap[userId].name
-                }</a> ${availabilityMap[scheduleByDate[date][userId]]}\n`;
+                }</a> ${availabilityMap(scheduleByDate[date][userId])}\n`;
             }
             listOfPeople += text;
             listOfPeople += `\n`;
@@ -611,5 +1076,5 @@ const listOfPeopleFormatGenerator = (
 bot.launch().then(() => console.log("Bot is running!"));
 
 // Enable graceful stop
-process.once('SIGINT', () => bot.stop('SIGINT'))
-process.once('SIGTERM', () => bot.stop('SIGTERM'))
+process.once("SIGINT", () => bot.stop("SIGINT"));
+process.once("SIGTERM", () => bot.stop("SIGTERM"));
