@@ -8,10 +8,12 @@ const {
     keyFilterByProperty,
     advancedMarkupGenerator,
     sendAutoDeleteMessage,
+    formatCalendarWithSelectedDates,
 } = require("./functions");
 
 require("dotenv").config();
 
+const fs = require("fs");
 const sanitizeHtml = require("sanitize-html");
 const sanitizeOptions = {
     allowedTags: [],
@@ -19,10 +21,8 @@ const sanitizeOptions = {
 };
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-const dates = {};
-const messageIdsForDeletion = {};
 
-const groups = {};
+let groups = {};
 // availablility status
 // 0 / not present: Unavailable
 // 1: Available (full day)
@@ -39,7 +39,7 @@ const availabilityMap = (availablilityType) => {
     }
 };
 
-const DEFAULT_USER_OBJECT = {
+const DEFAULT_GROUP_OBJECT = {
     dates: {},
     messageIdsForDeletion: [],
     stage: 0,
@@ -64,32 +64,32 @@ const DEFAULT_USER_OBJECT = {
     },
 };
 
-const memberNameMap = {};
+let memberNameMap = {};
 // {
 //     "memberId": "memberName"
 // }
 
-const groupNameMap = {};
+let groupNameMap = {};
 // {
 //     "groupId": "groupName"
 // }
 
-const groupMembersMap = {};
+let groupMembersMap = {};
 // {
 //     "groupId": "memberCount"
 // }
 
-const memberToGroupMap = {};
+let memberToGroupMap = {};
 // {
 //     "memberId": "groupId"
 // }
 
-const memberTimeout = {};
+let memberTimeout = {};
 // {
 //     "memberId": setTimeout()
 // }
 
-const memberActionableMessages = {};
+let memberActionableMessages = {};
 // {
 //     "memberId": {
 //         "select_dates": "message",
@@ -98,7 +98,7 @@ const memberActionableMessages = {};
 //     }
 // }
 
-const memberInputCustomMessage = {};
+let memberInputCustomMessage = {};
 // {
 //     "memberId": {
 //         "date": "yyyy-MM-yy",
@@ -106,12 +106,12 @@ const memberInputCustomMessage = {};
 //     }
 // }
 
-const memberMessageIDsToEditAfterStop = {};
+let memberMessageIDsToEditAfterStop = {};
 // {
 //     "memberId": ["messageId"]
 // }
 
-const groupBotCount = {};
+let groupBotCount = {};
 // {
 //     "groupId": "numBots"
 // }
@@ -120,8 +120,8 @@ const rangeCalendar = new Calendar(bot, {
     minDate: new Date(),
 });
 
-const selectDatesExplainerText = `\n\nPlease click on the dates on which you are available.\nTo reset, click the date again.\n\nℹ Updates will take ~1 second to be reflected - this is to prevent spam.\n\nℹ If you cannot make it for any of the dates, click the <b>《 🙁 I can't make it 》</b> button.\n\n<b><u>Available dates</u></b>\n`;
-const advancedExplainerText = `<i><b><u>⚙️ Advanced options for dates ⚙️</u></b></i>\n\nℹ At least one date must be selected above!\n\n🕐 Click on the ✅ or ❌ to <b><u>toggle your available state</u></b> for that time.\nIf you are available for the whole day, do not click on any button.\n\n🔧 To specify a custom message, click on the <b>《 Custom 🔧 》</b> button, then enter your message.`;
+const selectDatesExplainerText = `\n\nPlease click on the dates on which you are available.\nTo reset, click the date again.\n\nℹ Updates will take ~1 second to be reflected - this is to prevent spam.\n\n<b><u>Available dates</u></b>\n`;
+const advancedExplainerText = `<i><b><u>⚙️ Advanced options for dates ⚙️</u></b></i>\n\nℹ At least one date must be selected above!\n\n🕐 Click on the ✅ or ❌ to <b><u>toggle your available state</u></b> for that time.\nIf you are available for the whole day, do not click on any button.\n\nℹ If you cannot make it for any of the dates, click the <b>《 🙁 I can't make it 》</b> button.\n\n🔧 To specify a custom message for a date, click on the corresponding button under the <b>Custom 🔧</b> column, then enter your message.`;
 
 rangeCalendar.setDateListener((ctx, date) => {
     // handle calendar in groups
@@ -240,6 +240,8 @@ rangeCalendar.setDateListener((ctx, date) => {
                 `❗️ Error: Date is out of range! Please use the latest calendar to choose your dates.`
             );
 
+        rangeCalendar.setMinDate(new Date(start));
+        rangeCalendar.setMaxDate(new Date(end));
         // Clicking on the calendar toggles the user between 'free' and 'not free'.
         if (!groups[linkedGroupId].scheduleByDate[date])
             // if user hasn't typed anything yet, add it here
@@ -252,9 +254,12 @@ rangeCalendar.setDateListener((ctx, date) => {
             groups[linkedGroupId].scheduleByDate[date][userId] = 1;
             groups[linkedGroupId].scheduleByMember[userId][date] = 1;
 
-            if (groups[linkedGroupId].cmi.includes(userId.toString())) { 
+            if (groups[linkedGroupId].cmi.includes(userId.toString())) {
                 // user previously indicated they CMI, now they're free so remove them from the array
-                groups[linkedGroupId].cmi.splice(groups[linkedGroupId].cmi.indexOf(userId.toString()), 1);
+                groups[linkedGroupId].cmi.splice(
+                    groups[linkedGroupId].cmi.indexOf(userId.toString()),
+                    1
+                );
             }
         } else {
             delete groups[linkedGroupId].scheduleByDate[date][userId];
@@ -278,10 +283,14 @@ rangeCalendar.setDateListener((ctx, date) => {
             delete groups[linkedGroupId].scheduleByMember[userId];
         }
 
-        
+        // Issue: When the user changes the month in the calendar, the inline_markup changes.
+        // but, this change is not updated in the groups object.
+        // hence, when updateDmDateMessage() runs, it uses the old inline_markup, ignoring any changes the user made.
+        // Hence, we store the latest version of the markup (returned to us when we click on a button) in memory.
+        memberActionableMessages[userId].select_dates =
+            ctx.update.callback_query.message;
 
         const totalMembers = groupMembersMap[linkedGroupId];
-
         // Handle response to user
         // if (!memberTimeout[userId]) ctx.replyWithChatAction("typing");
 
@@ -364,6 +373,8 @@ bot.start(async (ctx) => {
                 ctx,
                 `❗️ Error: No running calendar found!\n\nCheck if the calendar in the group has been stopped`
             );
+
+        group.joinedMembers.push(ctx.chat.id);
         const { start, end } = group.dates;
 
         rangeCalendar.setMinDate(new Date(start));
@@ -372,12 +383,12 @@ bot.start(async (ctx) => {
         const calendarMarkup =
             rangeCalendar.getCalendar().reply_markup.inline_keyboard;
         const finalMarkup = [
-            [
-                {
-                    text: "🙁 I can't make it",
-                    callback_data: "cmi",
-                },
-            ],
+            // [
+            //     {
+            //         text: "🙁 I can't make it",
+            //         callback_data: "cmi",
+            //     },
+            // ],
             ...calendarMarkup,
         ];
 
@@ -397,19 +408,19 @@ bot.start(async (ctx) => {
         memberActionableMessages[ctx.chat.id].select_dates = selectDatesMsg;
 
         const advancedMsg = await ctx.replyWithHTML(
-            `${advancedExplainerText}`
-            // {
-            //     reply_markup: {
-            //         inline_keyboard: [
-            //             [
-            //                 {
-            //                     text: "Update advanced options 🔄",
-            //                     callback_data: "adv",
-            //                 },
-            //             ],
-            //         ],
-            //     },
-            // }
+            `${advancedExplainerText}`,
+            {
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            {
+                                text: "🙁 I can't make it",
+                                callback_data: "cmi",
+                            },
+                        ],
+                    ],
+                },
+            }
         );
         memberActionableMessages[ctx.chat.id].advanced = advancedMsg;
 
@@ -442,6 +453,7 @@ bot.start(async (ctx) => {
             scheduleByMember: {},
             info_message: null,
             cmi: [],
+            joinedMembers: [],
             creator: { userId: ctx.from.id, username: ctx.from.username },
         };
 
@@ -449,7 +461,7 @@ bot.start(async (ctx) => {
 
         const msg = await ctx.replyWithHTML(
             `
-                Hello, ${ctx.from.first_name}!\nPlease choose the date range you want to gather data for by clicking on 1️⃣ the <b>start date</b>, and then 2️⃣ the <b>end date</b>.\n\n⏹ Type /stop to cancel.
+                Hello, ${ctx.from.first_name}!\nPlease choose the date range you want to gather data for by clicking on 1️⃣ the <b>start date</b>, and then 2️⃣ the <b>end date</b>.\n\n🛑 Type /stop to cancel.
         `,
             rangeCalendar.getCalendar()
         );
@@ -472,38 +484,50 @@ bot.command("stop", async (ctx) => {
                 // delete the calendar
 
                 let text = "Calendar stopped. Thank you for using!\n\n";
-                let totalMembers = await ctx.getChatMembersCount();
+                let totalMembers = groupMembersMap[groupId];
 
-                if (groups[groupId].dates.start && groups[groupId].dates.end) {
-                    // user cancelled after choosing start and end
+                if (
+                    groups[groupId].dates.start &&
+                    groups[groupId].dates.end &&
+                    groups[groupId].info_message
+                ) {
+                    // user cancelled after choosing start and end and pressing 'confirm'
                     let addText =
-                        `<b><u>${formatDate(
+                        `🗓 <b><u>${formatDate(
                             groups[groupId].dates.start
                         )}</u></b> to <b><u>${formatDate(
                             groups[groupId].dates.end
-                        )}</u></b>\n\n` +
+                        )}</u></b> 🗓\n\n` +
                         listOfPeopleFormatGenerator(
                             groups[groupId].scheduleByMember,
                             groups[groupId].scheduleByDate,
                             memberNameMap
-                        );
+                        ) +
+                        `\n<b><u>🙁 Unable to make it</u></b>\n` +
+                        listOfUnableToMakeItGenerator(groups[groupId].cmi) +
+                        `\n👥 Responses: ${
+                            Object.keys(groups[groupId].scheduleByMember)
+                                .length + groups[groupId].cmi.length
+                        } / ${totalMembers}`;
                     text += addText;
                 }
                 const finalMsg = await ctx.replyWithHTML(text, {
                     disable_web_page_preview: true,
                 });
-                ctx.telegram.editMessageText(
-                    ctx.chat.id,
-                    groups[groupId].info_message.message_id,
-                    null,
-                    `Availability gathering has stopped. Please refer to the latest message by the bot for the compiled availability list!`,
-                    {
-                        parse_mode: "HTML",
-                    }
-                );
+
+                if (groups[groupId].info_message)
+                    ctx.telegram.editMessageText(
+                        ctx.chat.id,
+                        groups[groupId].info_message.message_id,
+                        null,
+                        `Availability gathering has stopped. Please refer to the latest message by the bot for the compiled availability list!`,
+                        {
+                            parse_mode: "HTML",
+                        }
+                    );
 
                 // edit all the messages sent to members
-                const memberIDs = Object.keys(groups[groupId].scheduleByMember);
+                const memberIDs = groups[groupId].joinedMembers || [];
                 memberIDs.forEach((memberId) => {
                     if (memberMessageIDsToEditAfterStop[memberId]) {
                         memberMessageIDsToEditAfterStop[memberId].forEach(
@@ -512,7 +536,7 @@ bot.command("stop", async (ctx) => {
                                     memberId,
                                     messageId,
                                     null,
-                                    `Availability gathering has stopped. Please refer to the latest message by the bot for the compiled availability list!`,
+                                    `Availability gathering has stopped. Please refer to the latest message by the bot in <b><u><i>${groupNameMap[groupId]}</i></u></b> for the compiled availability list!`,
                                     {
                                         parse_mode: "HTML",
                                     }
@@ -528,6 +552,26 @@ bot.command("stop", async (ctx) => {
                     delete memberInputCustomMessage[memberId];
                     delete memberMessageIDsToEditAfterStop[memberId];
                 });
+
+                if (groups[groupId].messageIdsForDeletion) {
+                    groups[groupId].messageIdsForDeletion.forEach(
+                        (messageId) => {
+                            ctx.telegram
+                                .deleteMessage(ctx.chat.id, messageId)
+                                .catch((e) => {
+                                    // if message couldn't be deleted, edit it instead
+                                    ctx.telegram
+                                        .editMessageText(
+                                            ctx.chat.id,
+                                            messageId,
+                                            null,
+                                            `Message removed because /stop was used.`
+                                        )
+                                        .catch(console.log);
+                                });
+                        }
+                    );
+                }
 
                 // cleanup
                 delete groups[groupId];
@@ -582,7 +626,7 @@ bot.command("broadcast", (ctx) => {
 });
 
 // prompt the user to set the number of bots in the channel excluding the plannerbot. Defaults to 0
-bot.command("setBotCount", async (ctx) => {
+bot.command("setbotcount", async (ctx) => {
     if (ctx.chat.type === "private") {
         sendAutoDeleteMessage(
             ctx,
@@ -596,12 +640,12 @@ bot.command("setBotCount", async (ctx) => {
             // If there are n people in a channel and 1 known bot, then there has to be at most n-2 bots in the channel. 1) owner 2) meetupbot
             sendAutoDeleteMessage(
                 ctx,
-                `Impossible bot number. Please try again. \n\n❗️ Do not include the MeetupBot in the count!`,
+                `Impossible bot number. Please try again. \n\n❗️ Do not include the Meetup Bot in the count!`,
                 5000
             );
         } else {
             groupBotCount[ctx.chat.id] = numBots;
-            sendAutoDeleteMessage(ctx, `Bot count set to ${numBots}`, 5000);
+            sendAutoDeleteMessage(ctx, `✅ Bot count set to ${numBots}`, 5000);
         }
     }
 });
@@ -632,6 +676,10 @@ bot.on("callback_query", (ctx) => {
         }
         case "cmi": {
             launchCmi(ctx);
+            break;
+        }
+        case "cmi_force": {
+            setUserAsCMI(ctx, groups);
             break;
         }
     }
@@ -685,7 +733,7 @@ const launchWaitingForOthers = async (ctx) => {
             start
         )}</u></b> to <b><u>${formatDate(
             end
-        )}</u></b> 🗓\n\nMembers, please indicate your available dates in this range by clicking on the button below.\n\n⏹ @${
+        )}</u></b> 🗓\n\nMembers, please indicate your available dates in this range by clicking on the button below.\n\n🛑 @${
             groups[ctx.chat.id].creator.username
         }: Type /stop when you are done collecting info.\n\n😄: All respondents attending.\n😀: &gt; 75% of respondents attending.\n🙂: &gt; 50% of respondents attending.\n\n`,
         {
@@ -780,42 +828,80 @@ const launchCmi = async (ctx) => {
                     .map((date) => formatDate(date))
                     .join(
                         ", "
-                    )}</u></b>.\n\nPlease remove your attendance before trying again.`
+                    )}</u></b>.\n\nPlease remove your attendance before trying again.\n\n❗️ <b>You may override this by clicking the button below.</b>`,
+                {
+                    reply_markup: {
+                        inline_keyboard: [
+                            [
+                                {
+                                    text: "❗️ Force set as cannot make it",
+                                    callback_data: "cmi_force",
+                                },
+                            ],
+                        ],
+                    },
+                }
             );
         } else {
-            groups[groupId].cmi.push(userId.toString());
-            sendAutoDeleteMessage(
-                ctx,
-                `🙁 @${username}, you have been set as unable to attend.`,
-                5000
-            );
-            ctx.answerCbQuery("✅ Status updated!");
-
-            updateGroupMessage(
-                ctx,
-                groups,
-                groupId,
-                memberNameMap,
-                groupMembersMap[groupId]
-            );
-
-            if (ctx.chat.type === "private") {
-                updateDmDateMessage(
-                    ctx,
-                    groups,
-                    groupId,
-                    availabilityMap,
-                    userId
-                );
-                updateDmAdvancedMessage(
-                    ctx,
-                    userId,
-                    memberActionableMessages,
-                    groupId,
-                    groups
-                );
-            }
+            setUserAsCMI(ctx, groups);
         }
+    }
+};
+
+const setUserAsCMI = (ctx, groups) => {
+    let groupId;
+    let userId;
+    if (ctx.chat.type === "private") {
+        userId = ctx.chat.id;
+        groupId = memberToGroupMap[userId];
+    } else {
+        groupId = ctx.chat.id;
+        userId = ctx.from.id;
+    }
+
+    const username = ctx.from.username;
+    const name = ctx.from.first_name;
+
+    memberNameMap[ctx.from.id] = { name, username };
+    groups[groupId].cmi.push(userId.toString());
+
+    // delete all instances from scheduleByMember
+    delete groups[groupId].scheduleByMember[userId];
+
+    // delete all instances from scheduleByDate
+    Object.keys(groups[groupId].scheduleByDate).forEach((date) => {
+        delete groups[groupId].scheduleByDate[date][userId];
+    });
+
+    sendAutoDeleteMessage(
+        ctx,
+        `🙁 @${username}, you have been set as unable to attend.`,
+        5000
+    );
+    ctx.answerCbQuery("✅ Status updated!");
+
+    updateGroupMessage(
+        ctx,
+        groups,
+        groupId,
+        memberNameMap,
+        groupMembersMap[groupId]
+    );
+
+    // If the user who has previously replied and set dates, there will be dates in the DM'ed message
+    // if the user then sets himself as CMI in the group, we still need to update the DM'ed messages if they exist
+
+    if (memberActionableMessages[userId]?.select_dates?.message_id) {
+        updateDmDateMessage(ctx, groups, groupId, availabilityMap, userId);
+    }
+    if (memberActionableMessages[userId]?.advanced?.message_id) {
+        updateDmAdvancedMessage(
+            ctx,
+            userId,
+            memberActionableMessages,
+            groupId,
+            groups
+        );
     }
 };
 
@@ -892,7 +978,7 @@ const manageAdvanced = async (ctx, identifier) => {
             ctx.replyWithHTML(
                 `Please type your custom message for <b><u>${formatDate(
                     date
-                )}</u></b> now.\n\nType /cancel to cancel this action.`
+                )}</u></b> now.\n\n❗️ Maximum of 64 characters allowed. \n\nType /cancel to cancel this action.`
             ).then((msg) => {
                 memberInputCustomMessage[userId] = {
                     messageId: msg.message_id,
@@ -1002,7 +1088,7 @@ bot.on("text", (ctx) => {
 
         sendAutoDeleteMessage(
             ctx,
-            `Your custom message for <b><u>${formatDate(
+            `✅ Your custom message for <b><u>${formatDate(
                 date
             )}</u></b> has been received.\n\n${sanitizedMessage}`,
             5000
@@ -1102,7 +1188,7 @@ const updateGroupMessage = (
             start
         )}</u></b> to <b><u>${formatDate(
             end
-        )}</u></b> 🗓\n\nMembers, please indicate your available dates by clicking on the button below.\n\n⏹ @${
+        )}</u></b> 🗓\n\nMembers, please indicate your available dates by clicking on the button below.\n\n🛑 @${
             groups[linkedGroupId].creator.username
         }: Type /stop when you are done collecting info.\n\n😄: All respondents attending.\n😀: &gt; 75% of respondents attending.\n🙂: &gt; 50% of respondents attending.\n\n` +
         listOfPeopleFormatGenerator(
@@ -1163,22 +1249,24 @@ const updateDmDateMessage = (
         }
     }
 
-    // message += selectedDatesGenerator(
+    // const oldInlineKeyboard =
+    //     memberActionableMessages[userId].select_dates.reply_markup
+    //         .inline_keyboard;
+    // const annotatedKeyboard = formatCalendarWithSelectedDates(
+    //     oldInlineKeyboard,
     //     Object.keys(groups[linkedGroupId].scheduleByMember[userId])
     // );
 
-    // edit message in DM - let the user know their availability
-
     ctx.telegram
         .editMessageText(
-            ctx.chat.id,
-            memberActionableMessages[ctx.chat.id].select_dates.message_id,
+            userId,
+            memberActionableMessages[userId].select_dates.message_id,
             null,
             message,
             {
-                reply_markup:
-                    memberActionableMessages[ctx.chat.id].select_dates
-                        .reply_markup,
+                reply_markup: 
+                    memberActionableMessages[userId].select_dates.reply_markup
+                ,
                 parse_mode: "HTML",
                 disable_web_page_preview: true,
             }
@@ -1198,20 +1286,28 @@ const updateDmAdvancedMessage = (
     if (!advancedMarkup)
         return sendErrorMessage(ctx, `Please select a date first!`);
 
-    ctx.telegram
-        .editMessageText(
-            userId,
-            memberActionableMessages[userId].advanced.message_id,
-            null,
-            memberActionableMessages[userId].advanced.text,
-            {
-                reply_markup: {
-                    inline_keyboard: advancedMarkup,
-                },
-                entities: memberActionableMessages[userId].advanced.entities,
-            }
-        )
-        .catch((e) => editErrorHandler(e, ctx));
+    ctx.telegram.editMessageReplyMarkup(
+        userId,
+        memberActionableMessages[userId].advanced.message_id,
+        null,
+        {
+            inline_keyboard: advancedMarkup,
+        }
+    );
+    // ctx.telegram
+    //     .editMessageText(
+    //         userId,
+    //         memberActionableMessages[userId].advanced.message_id,
+    //         null,
+    //         memberActionableMessages[userId].advanced.text,
+    //         {
+    //             reply_markup: {
+    //                 inline_keyboard: advancedMarkup,
+    //             },
+    //             entities: memberActionableMessages[userId].advanced.entities,
+    //         }
+    //     )
+    //     .catch((e) => editErrorHandler(e, ctx));
 };
 
 const listOfPeopleFormatGenerator = (
@@ -1315,3 +1411,49 @@ process.on("uncaughtException", console.log);
 process.on("unhandledRejection", console.log);
 process.on("warning", console.log);
 process.on("error", console.log);
+
+// Backup objects to data.json every 30 seconds
+const interval = setInterval(() => {
+    const objectsToBackup = {
+        groups,
+        memberNameMap,
+        groupNameMap,
+        groupMembersMap,
+        memberToGroupMap,
+        memberTimeout,
+        memberActionableMessages,
+        memberInputCustomMessage,
+        memberMessageIDsToEditAfterStop,
+        groupBotCount,
+    };
+    // console.log("Backed up data");
+    fs.writeFile("data.json", JSON.stringify(objectsToBackup), () => {});
+}, 30000);
+
+// reload objects into memory if crash
+try {
+    const previousData = JSON.parse(fs.readFileSync("data.json"));
+    if (Object.keys(previousData || {}).length) {
+        console.log("Reloading previous data");
+        console.log(JSON.stringify(previousData, null, 2));
+
+        groups = previousData.groups || {};
+        memberNameMap = previousData.memberNameMap || {};
+        groupNameMap = previousData.groupNameMap || {};
+        groupMembersMap = previousData.groupMembersMap || {};
+        memberToGroupMap = previousData.memberToGroupMap || {};
+        memberTimeout = previousData.memberTimeout || {};
+        memberActionableMessages = previousData.memberActionableMessages || {};
+        memberInputCustomMessage = previousData.memberInputCustomMessage || {};
+        memberMessageIDsToEditAfterStop =
+            previousData.memberMessageIDsToEditAfterStop || {};
+        groupBotCount = previousData.groupBotCount || {};
+    }
+} catch (e) {
+    if (e.code === "ENOENT") {
+        console.log("Backup file not found, backup not restored");
+    } else {
+        console.log("Error reading backup file");
+        console.log(e);
+    }
+}
