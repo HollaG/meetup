@@ -1419,7 +1419,7 @@ const interval = setInterval(() => {
         groupNameMap,
         groupMembersMap,
         memberToGroupMap,
-        memberTimeout,
+        // memberTimeout,
         memberActionableMessages,
         memberInputCustomMessage,
         memberMessageIDsToEditAfterStop,
@@ -1443,7 +1443,7 @@ try {
         groupNameMap = previousData.groupNameMap || {};
         groupMembersMap = previousData.groupMembersMap || {};
         memberToGroupMap = previousData.memberToGroupMap || {};
-        memberTimeout = previousData.memberTimeout || {};
+        // memberTimeout = previousData.memberTimeout || {};
         memberActionableMessages = previousData.memberActionableMessages || {};
         memberInputCustomMessage = previousData.memberInputCustomMessage || {};
         memberMessageIDsToEditAfterStop =
