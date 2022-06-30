@@ -1264,9 +1264,8 @@ const updateDmDateMessage = (
             null,
             message,
             {
-                reply_markup: 
-                    memberActionableMessages[userId].select_dates.reply_markup
-                ,
+                reply_markup:
+                    memberActionableMessages[userId].select_dates.reply_markup,
                 parse_mode: "HTML",
                 disable_web_page_preview: true,
             }
@@ -1426,8 +1425,10 @@ const interval = setInterval(() => {
         memberMessageIDsToEditAfterStop,
         groupBotCount,
     };
-    // console.log("Backed up data");
-    fs.writeFile("data.json", JSON.stringify(objectsToBackup), () => {});
+    console.log("Backed up data");
+    fs.writeFile("data.json", JSON.stringify(objectsToBackup), (e) => {
+        if (e) console.log(e);
+    });
 }, 30000);
 
 // reload objects into memory if crash
@@ -1452,6 +1453,9 @@ try {
 } catch (e) {
     if (e.code === "ENOENT") {
         console.log("Backup file not found, backup not restored");
+        fs.writeFile("data.json", JSON.stringify({}), (e) => {
+            if (e) console.log(e);
+        });
     } else {
         console.log("Error reading backup file");
         console.log(e);
