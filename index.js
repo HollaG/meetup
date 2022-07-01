@@ -878,6 +878,9 @@ const setUserAsCMI = (ctx, groups) => {
         `🙁 @${username}, you have been set as unable to attend.`,
         5000
     );
+
+    
+
     ctx.answerCbQuery("✅ Status updated!");
 
     updateGroupMessage(
@@ -1443,7 +1446,7 @@ try {
         groupNameMap = previousData.groupNameMap || {};
         groupMembersMap = previousData.groupMembersMap || {};
         memberToGroupMap = previousData.memberToGroupMap || {};
-        // memberTimeout = previousData.memberTimeout || {};
+        memberTimeout = {};
         memberActionableMessages = previousData.memberActionableMessages || {};
         memberInputCustomMessage = previousData.memberInputCustomMessage || {};
         memberMessageIDsToEditAfterStop =
