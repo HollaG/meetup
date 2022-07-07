@@ -62,6 +62,7 @@ const DEFAULT_GROUP_OBJECT = {
         userId: 0,
         username: 0,
     },
+    custom_message: "",
 };
 
 let memberNameMap = {};
@@ -338,7 +339,7 @@ bot.start(async (ctx) => {
     const chat = ctx.chat;
     const message = ctx.update.message;
     if (chat.type === "private") {
-        const linkedGroupId = ctx.startPayload;
+        const linkedGroupId = ctx.startPayload; // this is a STRING!!!!!!!!!
 
         if (!linkedGroupId) {
             ctx.reply("Add this bot to a group to start scheduling!", {
@@ -491,6 +492,7 @@ bot.start(async (ctx) => {
             cmi: [],
             joinedMembers: [],
             creator: { userId: ctx.from.id, username: ctx.from.username },
+            custom_message: "",
         };
 
         groupNameMap[chat.id] = chat.title;
@@ -686,6 +688,102 @@ bot.command("setbotcount", async (ctx) => {
     }
 });
 
+bot.command("setmessage", (ctx) => {
+    // check if there's an active calendar in the group
+    // check if the sender is the creator of the calendar
+
+    if (ctx.chat.type === "private") {
+        return sendAutoDeleteMessage(
+            ctx,
+            `❗️ Sorry, this command can only be run in a group.`,
+            5000
+        );
+    }
+
+    if (groups[ctx.chat.id]) {
+        if (groups[ctx.chat.id].creator.userId === ctx.from.id) {
+            // yes, set the message
+
+            // message must be less than 128 chars long
+            const content = ctx.message.text.split(" ").slice(1).join(" ");
+
+            const message = sanitizeHtml(content).trim();
+
+            if (message.length > 128) {
+                return sendAutoDeleteMessage(
+                    ctx,
+                    `❗️ Message must be less than 128 characters (currently ${message.length} characters).`,
+                    5000
+                );
+            }
+
+            if (message === groups[ctx.chat.id].custom_message) {
+                return sendAutoDeleteMessage(
+                    ctx,
+                    `❗️ Message cannot be the same!`,
+                    5000
+                );
+            }
+
+            if (message.length === 0) {
+                return sendAutoDeleteMessage(
+                    ctx,
+                    `❗️ Message cannot be empty!`,
+                    5000
+                );
+            }
+
+            groups[ctx.chat.id].custom_message = message;
+            sendAutoDeleteMessage(ctx, `✅ Message set.`, 5000);
+
+            // update the group message, as well as ALL MEMBER MESSAGES (if any)
+            updateGroupMessage(
+                ctx,
+                groups,
+                ctx.chat.id,
+                memberNameMap,
+                groupMembersMap[ctx.chat.id]
+            );
+
+            // for each member, update their message
+            const joinedMembers = groups[ctx.chat.id].joinedMembers;  
+
+            joinedMembers.forEach((memberId) => {
+                // check if this member is currently editing this group's calendar
+                if (memberToGroupMap[memberId] === ctx.chat.id.toString()) {
+                    // yes
+                    // update their message
+                
+                    updateDmDateMessage(
+                        ctx,
+                        groups,
+                        ctx.chat.id,
+                        availabilityMap,
+                        memberId
+                    );
+                } else {
+                    // ignore
+                }
+            });
+
+            
+
+        } else {
+            sendAutoDeleteMessage(
+                ctx,
+                `❗️ Sorry, only the calendar creator can set the message.`,
+                5000
+            );
+        }
+    } else {
+        sendAutoDeleteMessage(
+            ctx,
+            `❗️ There is no calendar running in this group! Type /start to start one.`,
+            5000
+        );
+    }
+});
+
 bot.on("callback_query", (ctx) => {
     // ctx.reply(`You chose ${ctx.update.callback_query.data}`);
     // console.log("Recieved callback button", ctx.update.callback_query);
@@ -771,7 +869,7 @@ const launchWaitingForOthers = async (ctx) => {
             end
         )}</u></b> 🗓\n\nMembers, please indicate your available dates in this range by clicking on the button below.\n\n🛑 @${
             groups[ctx.chat.id].creator.username
-        }: Type /stop when you are done collecting info.\n\n😄: All respondents attending.\n😀: &gt; 75% of respondents attending.\n🙂: &gt; 50% of respondents attending.\n\n`,
+        }: Type /stop when you are done collecting info.\n✍️ Type /setmessage to set a custom message.\n\n😄: All respondents attending.\n😀: &gt; 75% of respondents attending.\n🙂: &gt; 50% of respondents attending.\n\n`,
         {
             reply_markup: {
                 inline_keyboard: [
@@ -782,7 +880,7 @@ const launchWaitingForOthers = async (ctx) => {
                         },
                         {
                             text: "🗓 Indicate availability",
-                            url: `https://t.me/meetup_plannerdevbot?start=${ctx.chat.id}`,
+                            url: `https://t.me/meetup_plannerbot?start=${ctx.chat.id}`,
                         },
                     ],
                 ],
@@ -843,12 +941,13 @@ const launchCmi = async (ctx) => {
     if (!groups[groupId])
         return sendErrorMessage(ctx, `❗️ Error: no linked group!`);
 
-    if (groups[groupId].cmi.includes(userId)) {
+    if (groups[groupId].cmi.includes(userId.toString())) {
         // user is already in the cmi list
         sendErrorMessage(
             ctx,
             `❗️ @${username}, you have already indicated that you cannot make it!`
         );
+        ctx.answerCbQuery();
     } else {
         // if the user has indicated that they're coming, tell them that they have to remove their attendence first
         if (
@@ -878,6 +977,7 @@ const launchCmi = async (ctx) => {
                     },
                 }
             );
+            ctx.answerCbQuery();
         } else {
             setUserAsCMI(ctx, groups);
         }
@@ -928,17 +1028,24 @@ const setUserAsCMI = (ctx, groups) => {
     // If the user who has previously replied and set dates, there will be dates in the DM'ed message
     // if the user then sets himself as CMI in the group, we still need to update the DM'ed messages if they exist
 
-    if (memberActionableMessages[userId]?.select_dates?.message_id) {
-        updateDmDateMessage(ctx, groups, groupId, availabilityMap, userId);
-    }
-    if (memberActionableMessages[userId]?.advanced?.message_id) {
-        updateDmAdvancedMessage(
-            ctx,
-            userId,
-            memberActionableMessages,
-            groupId,
-            groups
-        );
+    // note: edge case
+    // If the user is editing group 2 and he clicks on 'cannot make it' in group 1,
+    // this code will incorrectly edit the message for group 2.
+    // Check if group 1's id === memberGroupMap[userId]
+    // if it is, then we edit
+    if (memberGroupMap[userId] === groupId) {
+        if (memberActionableMessages[userId]?.select_dates?.message_id) {
+            updateDmDateMessage(ctx, groups, groupId, availabilityMap, userId);
+        }
+        if (memberActionableMessages[userId]?.advanced?.message_id) {
+            updateDmAdvancedMessage(
+                ctx,
+                userId,
+                memberActionableMessages,
+                groupId,
+                groups
+            );
+        }
     }
 };
 
@@ -1194,7 +1301,6 @@ const selectedDatesGenerator = (dates) => {
         }
     }
 
-    console.log({ groups });
     let text = "";
     for (let group of groups) {
         if (isSameDay(group.start, group.end)) {
@@ -1225,9 +1331,13 @@ const updateGroupMessage = (
             start
         )}</u></b> to <b><u>${formatDate(
             end
-        )}</u></b> 🗓\n\nMembers, please indicate your available dates by clicking on the button below.\n\n🛑 @${
+        )}</u></b> 🗓\n\nMembers, please indicate your available dates by clicking on the button below.\n\n${
+            groups[linkedGroupId].custom_message
+                ? `<b><u>Message from @${groups[linkedGroupId].creator.username}</u></b>\n${groups[linkedGroupId].custom_message}\n\n`
+                : ""
+        }🛑 @${
             groups[linkedGroupId].creator.username
-        }: Type /stop when you are done collecting info.\n\n😄: All respondents attending.\n😀: &gt; 75% of respondents attending.\n🙂: &gt; 50% of respondents attending.\n\n` +
+        }: Type /stop when you are done collecting info.\n✍️ Type /setmessage to set a custom message.\n\n😄: All respondents attending.\n😀: &gt; 75% of respondents attending.\n🙂: &gt; 50% of respondents attending.\n\n` +
         listOfPeopleFormatGenerator(
             groups[linkedGroupId].scheduleByMember,
             groups[linkedGroupId].scheduleByDate,
@@ -1272,7 +1382,11 @@ const updateDmDateMessage = (
         groups[linkedGroupId].creator.username
     } requests that you indicate your available dates from <b><u>${formatDate(
         start
-    )}</u></b> to <b><u>${formatDate(end)}</u></b>.${selectDatesExplainerText}`;
+    )}</u></b> to <b><u>${formatDate(end)}</u></b>.${
+        !!groups[linkedGroupId].custom_message
+            ? `\n\n<b><u>Message from @${groups[linkedGroupId].creator.username}</u></b>\n${groups[linkedGroupId].custom_message}`
+            : ""
+    }${selectDatesExplainerText}`;
 
     if (groups[linkedGroupId].cmi.includes(userId.toString())) {
         message += `<b>🙁 Unable to make it</b>\n`;
@@ -1473,7 +1587,7 @@ try {
     const previousData = JSON.parse(fs.readFileSync("data.json"));
     if (Object.keys(previousData || {}).length) {
         console.log("Reloading previous data");
-        console.log(JSON.stringify(previousData, null, 2));
+        // console.log(JSON.stringify(previousData, null, 2));
 
         groups = previousData.groups || {};
         memberNameMap = previousData.memberNameMap || {};
