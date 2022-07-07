@@ -564,31 +564,33 @@ bot.command("stop", async (ctx) => {
                         }
                     );
 
-                // edit all the messages sent to members
+                // edit all the messages sent to members only if they're currently editing this group's calendar
                 const memberIDs = groups[groupId].joinedMembers || [];
                 memberIDs.forEach((memberId) => {
-                    if (memberMessageIDsToEditAfterStop[memberId]) {
-                        memberMessageIDsToEditAfterStop[memberId].forEach(
-                            (messageId) => {
-                                ctx.telegram.editMessageText(
-                                    memberId,
-                                    messageId,
-                                    null,
-                                    `Availability gathering has stopped. Please refer to the latest message by the bot in <b><u><i>${groupNameMap[groupId]}</i></u></b> for the compiled availability list!`,
-                                    {
-                                        parse_mode: "HTML",
-                                    }
-                                );
-                            }
-                        );
-                    }
+                    if (memberToGroupMap[memberId] === groupId) {
+                        if (memberMessageIDsToEditAfterStop[memberId]) {
+                            memberMessageIDsToEditAfterStop[memberId].forEach(
+                                (messageId) => {
+                                    ctx.telegram.editMessageText(
+                                        memberId,
+                                        messageId,
+                                        null,
+                                        `Availability gathering has stopped. Please refer to the latest message by the bot in <b><u><i>${groupNameMap[groupId]}</i></u></b> for the compiled availability list!`,
+                                        {
+                                            parse_mode: "HTML",
+                                        }
+                                    );
+                                }
+                            );
+                        }
 
-                    // cleanup the member objects
-                    delete memberToGroupMap[memberId];
-                    delete memberTimeout[memberId];
-                    delete memberActionableMessages[memberId];
-                    delete memberInputCustomMessage[memberId];
-                    delete memberMessageIDsToEditAfterStop[memberId];
+                        // cleanup the member objects
+                        delete memberToGroupMap[memberId];
+                        delete memberTimeout[memberId];
+                        delete memberActionableMessages[memberId];
+                        delete memberInputCustomMessage[memberId];
+                        delete memberMessageIDsToEditAfterStop[memberId];
+                    }
                 });
 
                 if (groups[groupId].messageIdsForDeletion) {
@@ -746,14 +748,14 @@ bot.command("setmessage", (ctx) => {
             );
 
             // for each member, update their message
-            const joinedMembers = groups[ctx.chat.id].joinedMembers;  
+            const joinedMembers = groups[ctx.chat.id].joinedMembers;
 
             joinedMembers.forEach((memberId) => {
                 // check if this member is currently editing this group's calendar
                 if (memberToGroupMap[memberId] === ctx.chat.id.toString()) {
                     // yes
                     // update their message
-                
+
                     updateDmDateMessage(
                         ctx,
                         groups,
@@ -765,9 +767,6 @@ bot.command("setmessage", (ctx) => {
                     // ignore
                 }
             });
-
-            
-
         } else {
             sendAutoDeleteMessage(
                 ctx,
@@ -880,7 +879,7 @@ const launchWaitingForOthers = async (ctx) => {
                         },
                         {
                             text: "🗓 Indicate availability",
-                            url: `https://t.me/meetup_plannerbot?start=${ctx.chat.id}`,
+                            url: `https://t.me/meetup_plannerdevbot?start=${ctx.chat.id}`,
                         },
                     ],
                 ],
@@ -998,6 +997,17 @@ const setUserAsCMI = (ctx, groups) => {
     const username = ctx.from.username;
     const name = ctx.from.first_name;
 
+    if (groups[groupId].cmi.includes(userId.toString())) {
+        // user is already in the cmi list
+        sendErrorMessage(
+            ctx,
+            `❗️ @${username}, you have already indicated that you cannot make it!`
+        );
+        ctx.answerCbQuery();
+
+        return;
+    }
+
     memberNameMap[ctx.from.id] = { name, username };
     groups[groupId].cmi.push(userId.toString());
 
@@ -1033,7 +1043,7 @@ const setUserAsCMI = (ctx, groups) => {
     // this code will incorrectly edit the message for group 2.
     // Check if group 1's id === memberGroupMap[userId]
     // if it is, then we edit
-    if (memberGroupMap[userId] === groupId) {
+    if (memberToGroupMap[userId] === groupId) {
         if (memberActionableMessages[userId]?.select_dates?.message_id) {
             updateDmDateMessage(ctx, groups, groupId, availabilityMap, userId);
         }
