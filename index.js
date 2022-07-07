@@ -364,6 +364,25 @@ bot.start(async (ctx) => {
             );
         }
 
+        // If the member was already editing another group, e.g. they /start in group 1 then /start in group 2, delete the group1 messages.
+        if (memberToGroupMap[ctx.chat.id]) {
+            if (memberMessageIDsToEditAfterStop[ctx.chat.id]) {
+                memberMessageIDsToEditAfterStop[ctx.chat.id].forEach(
+                    (msgId) => {
+                        ctx.telegram.editMessageText(
+                            ctx.chat.id,
+                            msgId,
+                            null,
+                            `<i>Message removed because you have linked a new group to the calendar.</i>`,
+                            {
+                                parse_mode: "HTML",
+                            }
+                        );
+                    }
+                );
+            }
+        }
+
         memberToGroupMap[ctx.chat.id] = linkedGroupId;
         memberActionableMessages[ctx.chat.id] = {};
 
@@ -429,6 +448,23 @@ bot.start(async (ctx) => {
             selectDatesMsg.message_id,
             advancedMsg.message_id,
         ];
+
+        // because user might have previoulsy entered some dates, update the messages that were just sent to the user
+        updateDmDateMessage(
+            ctx,
+            groups,
+            linkedGroupId,
+            availabilityMap,
+            ctx.chat.id
+        );
+        updateDmAdvancedMessage(
+            ctx,
+
+            ctx.chat.id,
+            memberActionableMessages,
+            linkedGroupId,
+            groups
+        );
     } else if (chat.type === "group" || chat.type === "supergroup") {
         // Check if there already is a running calendar in the group
         if (groups[chat.id]) {
@@ -746,7 +782,7 @@ const launchWaitingForOthers = async (ctx) => {
                         },
                         {
                             text: "🗓 Indicate availability",
-                            url: `https://t.me/meetup_plannerbot?start=${ctx.chat.id}`,
+                            url: `https://t.me/meetup_plannerdevbot?start=${ctx.chat.id}`,
                         },
                     ],
                 ],
@@ -878,8 +914,6 @@ const setUserAsCMI = (ctx, groups) => {
         `🙁 @${username}, you have been set as unable to attend.`,
         5000
     );
-
-    
 
     ctx.answerCbQuery("✅ Status updated!");
 
