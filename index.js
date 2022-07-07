@@ -879,7 +879,7 @@ const launchWaitingForOthers = async (ctx) => {
                         },
                         {
                             text: "🗓 Indicate availability",
-                            url: `https://t.me/meetup_plannerdevbot?start=${ctx.chat.id}`,
+                            url: `https://t.me/${process.env.BOT_NAME}?start=${ctx.chat.id}`,
                         },
                     ],
                 ],
